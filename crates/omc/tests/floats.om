@@ -1,0 +1,13 @@
+struct P { x: f64, y: f32 }
+fn wrap[T](x: T) -> Option[T] { Some(x) }
+fn outer[T](x: T) -> Option[Option[T]] { wrap(wrap(x)) }
+fn main() {
+    print(P { x: 4.0, y: 2.5 })
+    print(4.0)
+    print(1e20)
+    print([1e20, 1e16, 1e15, 0.0001, 0.00001, -0.0, 0.1 + 0.2])
+    print(1e-7)
+    print(Some(3.0f32))
+    print(f64::MAX)
+    print(outer(5))
+}

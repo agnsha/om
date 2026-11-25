@@ -3276,11 +3276,11 @@ impl<'a> Lower<'a> {
         Ok((v, t))
     }
 
-    /// `subst` on top of this function's own type arguments.
+    /// The type arguments to resolve a callee's signature with.
     fn merged(&self, subst: &Subst) -> Subst {
-        let mut m = self.subst.clone();
-        m.extend(subst.iter().map(|(k, v)| (k.clone(), v.clone())));
-        m
+        // The callee's type parameters are its own, even when they share a name with
+        // ours (`fn f[T]` calling `g[T]`), so only `subst` applies to its signature.
+        subst.clone()
     }
 
     fn require_all(&self, vars: &[String], subst: &Subst, what: &str, span: Span) -> CResult<Vec<Ty>> {
@@ -4888,8 +4888,13 @@ impl<'a> Lower<'a> {
                 let f = if t.signed() { "om_rt_write_i64" } else { "om_rt_write_u64" };
                 self.rt_call(f, types::I64, wide)
             }
-            Ty::F32 => self.rt_call("om_rt_write_f32", types::F32, vals[0]),
-            Ty::F64 => self.rt_call("om_rt_write_f64", types::F64, vals[0]),
+            // Inside a struct, list or enum, floats print like Rust's `{:?}` (`4.0`).
+            Ty::F32 => {
+                self.rt_call(if nested { "om_rt_write_f32_dbg" } else { "om_rt_write_f32" }, types::F32, vals[0])
+            }
+            Ty::F64 => {
+                self.rt_call(if nested { "om_rt_write_f64_dbg" } else { "om_rt_write_f64" }, types::F64, vals[0])
+            }
             Ty::Char => {
                 if nested {
                     self.write_str("'")?;
@@ -5096,23 +5101,48 @@ double om_rt_math_powf(double x, double y) { return pow(x, y); }
 double om_rt_math_atan2(double y, double x) { return atan2(y, x); }
 double om_rt_math_hypot(double x, double y) { return hypot(x, y); }
 double om_rt_math_fmod(double x, double y) { return fmod(x, y); }
-static int write_f64(FILE *out, double x) {
-    /* Shortest text that reads back as the same double, like Rust's `{}` for f64. */
-    char buf[32];
-    for (int p = 1; p <= 17; p++) {
-        snprintf(buf, sizeof buf, "%.*g", p, x);
-        if (strtod(buf, NULL) == x) break;
+/* Format a float like Rust: `{}` (Display) never uses an exponent and prints
+   4.0 as "4"; `{:?}` (Debug) prints "4.0" and switches to "1e16" / "1e-5" for
+   very large or small values. `digits` is 17 for f64 and 9 for f32. */
+static int write_float(FILE *out, double x, int is_f32, int debug) {
+    if (x != x) return fputs("NaN", out);
+    if (x == 1.0 / 0.0) return fputs("inf", out);
+    if (x == -1.0 / 0.0) return fputs("-inf", out);
+    char e[40];
+    int maxp = is_f32 ? 9 : 17;
+    for (int p = 1; p <= maxp; p++) {
+        snprintf(e, sizeof e, "%.*e", p - 1, x);
+        if (is_f32 ? strtof(e, NULL) == (float)x : strtod(e, NULL) == x) break;
     }
+    /* e is like "-1.2345e+07": collect sign, digits and exponent. */
+    char digits[24];
+    int nd = 0, neg = 0, i = 0;
+    if (e[0] == '-') { neg = 1; i = 1; }
+    for (; e[i] && e[i] != 'e'; i++) if (e[i] != '.') digits[nd++] = e[i];
+    int exp = atoi(e + i + 1);
+    while (nd > 1 && digits[nd - 1] == '0') nd--;
+    digits[nd] = 0;
+    char buf[400];
+    int k = 0;
+    if (neg) buf[k++] = '-';
+    if (debug && (exp < -4 || exp >= 16)) {
+        buf[k++] = digits[0];
+        if (nd > 1) { buf[k++] = '.'; for (int j = 1; j < nd; j++) buf[k++] = digits[j]; }
+        k += snprintf(buf + k, sizeof buf - k, "e%d", exp);
+    } else if (exp >= 0) {
+        for (int j = 0; j <= exp; j++) buf[k++] = j < nd ? digits[j] : '0';
+        if (nd > exp + 1) { buf[k++] = '.'; for (int j = exp + 1; j < nd; j++) buf[k++] = digits[j]; }
+        else if (debug) { buf[k++] = '.'; buf[k++] = '0'; }
+    } else {
+        buf[k++] = '0'; buf[k++] = '.';
+        for (int j = 0; j < -exp - 1; j++) buf[k++] = '0';
+        for (int j = 0; j < nd; j++) buf[k++] = digits[j];
+    }
+    buf[k] = 0;
     return fputs(buf, out);
 }
-static int write_f32(FILE *out, float x) {
-    char buf[32];
-    for (int p = 1; p <= 9; p++) {
-        snprintf(buf, sizeof buf, "%.*g", p, (double)x);
-        if (strtof(buf, NULL) == x) break;
-    }
-    return fputs(buf, out);
-}
+static int write_f64(FILE *out, double x) { return write_float(out, x, 0, 0); }
+static int write_f32(FILE *out, float x) { return write_float(out, x, 1, 0); }
 static int write_char(FILE *out, unsigned c) {
     /* UTF-8 encode one Unicode scalar value. */
     char b[4];
@@ -5171,6 +5201,10 @@ char om_rt_parse_ok(void) { return om_parse_ok_; }
 int om_rt_write_i64(long long n) { return fprintf(om_out(), "%lld", n); }
 int om_rt_write_u64(unsigned long long n) { return fprintf(om_out(), "%llu", n); }
 int om_rt_write_f32(float x) { return write_f32(om_out(), x); }
+int om_rt_write_f32_dbg(float x) { return write_float(om_out(), x, 1, 1); }
+int om_rt_ewrite_f32_dbg(float x) { return write_float(stderr, x, 1, 1); }
+int om_rt_write_f64_dbg(double x) { return write_float(om_out(), x, 0, 1); }
+int om_rt_ewrite_f64_dbg(double x) { return write_float(stderr, x, 0, 1); }
 int om_rt_write_char(unsigned c) { return write_char(om_out(), c); }
 int om_rt_ewrite_u64(unsigned long long n) { return fprintf(stderr, "%llu", n); }
 int om_rt_ewrite_f32(float x) { return write_f32(stderr, x); }
