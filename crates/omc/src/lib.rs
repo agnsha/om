@@ -107,6 +107,11 @@ pub const MAX_SOURCE_BYTES: u64 = 16 << 20;
 
 /// Read a source file, refusing huge files, devices and invalid UTF-8.
 pub fn read_source(path: &Path) -> Result<String, String> {
+    // Windows cannot open a directory as a file at all, so look first; the
+    // check after opening still catches a path swapped in between.
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        return Err(format!("`{}` is not a regular file", path.display()));
+    }
     let file = std::fs::File::open(path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
     let meta = file.metadata().map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
     if !meta.is_file() {
