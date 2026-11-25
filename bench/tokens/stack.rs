@@ -1,0 +1,26 @@
+struct Stack<T> {
+    items: Vec<T>,
+}
+
+impl<T> Stack<T> {
+    fn new() -> Self {
+        Stack { items: Vec::new() }
+    }
+    fn push(&mut self, x: T) {
+        self.items.push(x);
+    }
+    fn pop(&mut self) -> Option<T> {
+        self.items.pop()
+    }
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+}
+
+fn main() {
+    let mut s: Stack<String> = Stack::new();
+    s.push("a".to_string());
+    s.push("b".to_string());
+    println!("{:?}", s.pop());
+    println!("{}", s.len());
+}

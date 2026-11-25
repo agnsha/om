@@ -51,6 +51,30 @@ fn main() -> i64 {
 }
 ```
 
+## Check, fix and test
+
+```sh
+om check app.om     # every error at once, each with a code: om explain E0200
+om fix app.om       # apply the safe fixes
+om test app.om      # run every fn test_*() in the file
+om fmt app.om       # canonical layout
+```
+
+A test is a function whose name starts with `test_`:
+
+```om
+fn double(x: i64) -> i64 { x * 2 }
+
+fn test_double() {
+    assert_eq(double(2), 4)
+}
+
+fn main() { print(double(21)) }
+```
+
+If you use an AI coding agent, have it run `om guide` once per session and set
+`OM_AGENT=1` for compact errors.
+
 ## Next
 
 Read the [language reference](language.md) and try the programs in

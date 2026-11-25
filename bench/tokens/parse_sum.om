@@ -1,0 +1,12 @@
+fn parse_all(items: &Vec[str]) -> Result[i64, String] {
+    let mut sum = 0
+    for s in items {
+        sum += s.trim().parse_int().context("item `{s}`")?
+    }
+    Ok(sum)
+}
+
+fn main() {
+    print(parse_all(&["1", " 2", "39"]))
+    print(parse_all(&["4", "x5"]))
+}

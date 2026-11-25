@@ -237,7 +237,88 @@ impl std::error::Error for LexError {}
 
 /// Tokenize a whole source file. The returned list always ends with [`TokenKind::Eof`].
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
-    Lexer { src, bytes: src.as_bytes(), pos: 0 }.run()
+    let (tokens, mut errors) = lex_all(src);
+    if errors.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(errors.remove(0))
+    }
+}
+
+/// Most lexical errors reported for one file; after that, lexing stops.
+pub const MAX_ERRORS: usize = 200;
+
+/// Tokenize a whole source file, skipping past bad characters and literals so
+/// one run reports every lexical error. The token list always ends with
+/// [`TokenKind::Eof`]; it is only meaningful to parse when `errors` is empty or
+/// when the caller wants best-effort recovery.
+/// End (past the closing quote) of the string literal at `start`, if it closes
+/// on the same line.
+fn string_end(src: &str, start: usize) -> Option<usize> {
+    let b = src.as_bytes();
+    let mut i = start + 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            b'\n' => return None,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+pub fn lex_all(src: &str) -> (Vec<Token>, Vec<LexError>) {
+    let mut lx = Lexer { src, bytes: src.as_bytes(), pos: 0 };
+    let mut out = Vec::new();
+    let mut errors = Vec::new();
+    loop {
+        let mut start = lx.pos;
+        let step = match lx.skip_trivia() {
+            Err(e) => Err(e),
+            Ok(()) => match lx.bytes.get(lx.pos) {
+                None => break,
+                Some(_) => {
+                    start = lx.pos;
+                    lx.token()
+                }
+            },
+        };
+        match step {
+            Ok(Some(tok)) => out.push(tok),
+            Ok(None) => {}
+            Err(e) => {
+                let multi_line = matches!(src.as_bytes().get(start), Some(b'"' | b'\''));
+                errors.push(e);
+                if errors.len() >= MAX_ERRORS {
+                    break;
+                }
+                // Resume after the bad token: past one character at least, and to
+                // the end of the line for a broken string or character literal.
+                if lx.pos <= start {
+                    lx.pos = start + src[start..].chars().next().map_or(1, char::len_utf8);
+                }
+                if src.as_bytes().get(start) == Some(&b'"') {
+                    // A broken string that closes on its line still stands for a
+                    // string: keep a placeholder so the parser sees no extra errors.
+                    if let Some(end) = string_end(src, start) {
+                        lx.pos = end;
+                        out.push(Token { kind: TokenKind::Str(String::new()), span: Span::new(start, end) });
+                        continue;
+                    }
+                }
+                if multi_line {
+                    lx.pos = src[lx.pos.min(src.len())..].find('\n').map_or(src.len(), |i| lx.pos + i);
+                }
+            }
+        }
+        if lx.pos >= src.len() {
+            break;
+        }
+    }
+    let end = src.len();
+    out.push(Token { kind: TokenKind::Eof, span: Span::new(end, end) });
+    (out, errors)
 }
 
 struct Lexer<'a> {
@@ -247,24 +328,52 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn run(mut self) -> Result<Vec<Token>, LexError> {
-        let mut out = Vec::new();
-        loop {
-            self.skip_trivia()?;
-            let start = self.pos;
-            let Some(&c) = self.bytes.get(self.pos) else {
-                out.push(Token { kind: TokenKind::Eof, span: Span::new(start, start) });
-                return Ok(out);
-            };
-            let kind = match c {
-                b'0'..=b'9' => self.number()?,
-                b'"' => self.string()?,
-                b'\'' => self.quote()?,
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident(),
-                _ => self.punct()?,
-            };
-            out.push(Token { kind, span: Span::new(start, self.pos) });
+    /// Read one token at `pos` (trivia already skipped). `None` for skipped input.
+    fn token(&mut self) -> Result<Option<Token>, LexError> {
+        let start = self.pos;
+        let c = self.bytes[self.pos];
+        let kind = match c {
+            b'0'..=b'9' => self.number()?,
+            b'"' => self.string()?,
+            b'\'' => self.quote()?,
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident(),
+            b'#' => return self.attribute(),
+            _ => self.punct()?,
+        };
+        Ok(Some(Token { kind, span: Span::new(start, self.pos) }))
+    }
+
+    /// `#[derive(Debug)]` and `#![...]`: Rust attributes, which Om does not have.
+    /// The whole attribute is one error, so it does not cascade into parse errors.
+    fn attribute(&mut self) -> Result<Option<Token>, LexError> {
+        let start = self.pos;
+        self.pos += 1;
+        if self.peek(0) == Some(b'!') {
+            self.pos += 1;
         }
+        if self.peek(0) != Some(b'[') {
+            return self.err("unexpected character `#`", start);
+        }
+        let mut depth = 0;
+        while let Some(c) = self.peek(0) {
+            match c {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += 1;
+                        break;
+                    }
+                }
+                b'\n' => break,
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        self.err(
+            "Om has no attributes: values print, compare and copy without `derive`, and tests need no `#[test]`",
+            start,
+        )
     }
 
     fn peek(&self, off: usize) -> Option<u8> {

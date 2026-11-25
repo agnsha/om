@@ -5,19 +5,33 @@ on:
     branches: [main]
   pull_request:
 
+# The workflow only reads the repository. Nothing here can push, comment or
+# publish, so a compromised step or dependency cannot write back.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  # Agent-friendly output in logs: one line per error.
+  OM_AGENT: "1"
 
 jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -25,12 +39,32 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all
+        run: cargo test --locked --all
       - name: Run examples
         run: |
           for f in examples/*.om; do
             echo "== $f"
-            cargo run -q --bin om -- run "$f"
+            cargo run -q --locked --bin om -- run "$f"
           done
+      - name: Examples are formatted and pass om check
+        run: |
+          for f in examples/*.om; do
+            cargo run -q --locked --bin om -- fmt --check "$f"
+            cargo run -q --locked --bin om -- check "$f"
+          done
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check dependencies against the RustSec advisory database
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
