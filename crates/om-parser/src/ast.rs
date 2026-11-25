@@ -170,6 +170,16 @@ pub enum Stmt {
         label: Option<String>,
         span: Span,
     },
+    /// `for pat in iter { body }` over a list: by reference when `iter` is `&list`
+    /// (or a borrowed list), otherwise taking each element out.
+    /// See `om_parser::desugar_for_each`.
+    ForEach {
+        pat: Pattern,
+        iter: Expr,
+        body: Block,
+        label: Option<String>,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,
