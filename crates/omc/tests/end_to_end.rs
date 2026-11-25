@@ -124,6 +124,125 @@ fn named_default_pipe_and_interpolation() {
     assert_eq!(build_and_run(src, "features2"), "hi ana!\nhi bo?\nhi bo?\n12\n-5 false 23\n");
 }
 
+#[test]
+fn loops_break_continue_and_ranges() {
+    let src = r#"
+        fn main() {
+            let mut sum = 0
+            for i in 1..=10 {
+                if i % 3 == 0 { continue }
+                sum += i
+            }
+            print(sum)
+            let mut n = 0
+            while true {
+                n += 1
+                if n == 4 { break }
+            }
+            print(n)
+            let first_square_over_50 = loop {
+                n += 1
+                if n * n > 50 { break n * n }
+            }
+            print(first_square_over_50)
+            for i in 0..0 { print(i) }
+            let mut x = 100
+            x -= 1; x *= 2; x /= 3; x %= 50
+            print(x)
+        }
+    "#;
+    assert_eq!(build_and_run(src, "loops"), "37\n4\n64\n16\n");
+}
+
+#[test]
+fn floats_and_casts() {
+    let src = r#"
+        const PI: f64 = 3.14159
+        fn main() {
+            print(0.1 + 0.2)
+            print(PI * 2.0)
+            print(1.0 / 4.0)
+            print(7 as f64 / 2.0)
+            print(3.99 as i64)
+            print(-2.5 as i64)
+            print(true as i64 + 1)
+            print(2.0 > 1.5 && 1.0 == 1.0)
+            print(1e3 == 1000.0)
+        }
+    "#;
+    // 1e3 is not valid Om yet; it reads as `1` then a name, so check that separately.
+    assert!(omc::compile(src).is_err());
+    let src = src.replace("print(1e3 == 1000.0)", "print(-0.5)");
+    assert_eq!(build_and_run(&src, "floats"), "0.30000000000000004\n6.28318\n0.25\n3.5\n3\n-2\n2\ntrue\n-0.5\n");
+}
+
+#[test]
+fn structs_methods_and_mut_refs() {
+    let src = r#"
+        struct Counter { count: i64, step: i64 }
+        struct Pair { a: Counter, b: Counter }
+        impl Counter {
+            fn new(step: i64 = 1) -> Self { Self { count: 0, step } }
+            fn tick(&mut self) { self.count += self.step }
+            fn ticked(self) -> Counter { let mut c = self; c.tick(); c }
+            fn get(&self) -> i64 { self.count }
+        }
+        fn swap(a: &mut i64, b: &mut i64) { let t = a; a = b; b = t }
+        fn main() {
+            let mut c = Counter::new()
+            c.tick()
+            c.tick()
+            print(c.get())
+            let mut p = Pair { a: Counter::new(step: 10), b: c }
+            p.a.tick()
+            p.b.tick()
+            print(p)
+            print(Counter::new(5).ticked().ticked().get())
+            let mut x = 1
+            let mut y = 2
+            swap(&mut x, &mut y)
+            print("{x} {y}")
+            let copy = p.a
+            p.a.tick()
+            print("{copy.count} {p.a.count}")
+        }
+    "#;
+    assert_eq!(
+        build_and_run(src, "structs"),
+        "2\nPair { a: Counter { count: 10, step: 10 }, b: Counter { count: 3, step: 1 } }\n10\n2 1\n10 20\n"
+    );
+}
+
+#[test]
+fn enums_and_match() {
+    let src = r#"
+        enum Token { Num(i64), Plus, Times, Neg(i64, bool) }
+        fn value(t: Token) -> i64 {
+            match t {
+                Token::Num(n) if n > 100 => 100,
+                Token::Num(n) => n,
+                Token::Neg(n, true) => -n,
+                Token::Neg(_, false) => 0,
+                Token::Plus | Token::Times => -1,
+            }
+        }
+        fn main() {
+            print(value(Token::Num(7)))
+            print(value(Token::Num(700)))
+            print(value(Token::Neg(4, true)))
+            print(value(Token::Neg(4, false)))
+            print(value(Token::Times))
+            print(Token::Neg(3, false))
+            let t = Token::Plus
+            print(t)
+            let label = match 42 { 0 => "zero", 1..=9 => "digit", 10..100 => "two digits", _ => "big" }
+            print(label)
+            print(match true { true => 1, false => 0 })
+        }
+    "#;
+    assert_eq!(build_and_run(src, "enums"), "7\n100\n-4\n0\n-1\nNeg(3, false)\nPlus\ntwo digits\n1\n");
+}
+
 fn compile_error(src: &str) -> String {
     omc::compile(src).expect_err("program should be rejected").message
 }
@@ -133,7 +252,7 @@ fn rejects_bad_programs() {
     let cases = [
         ("fn main() { print(x) }", "cannot find variable `x`"),
         ("fn main() { let a = 1; a = 2 }", "cannot assign twice to `a`"),
-        ("fn main() { let a = 1 + true }", "mismatched types: i64 and bool"),
+        ("fn main() { let a = 1 + true }", "mismatched types: i64 + bool"),
         ("fn f() -> i64 { true } fn main() {}", "must return i64"),
         ("fn main() { if 1 { } }", "condition must be bool"),
         ("fn f(a: i64) {} fn main() { f(1, 2) }", "takes 1 argument(s) but 2 were given"),
@@ -151,6 +270,23 @@ fn rejects_bad_programs() {
         ("fn main() { let s = \"x{1}\" }", "only be used inside `print`"),
         ("fn f() -> i64 { defer { return 1 } 2 } fn main() {}", "not allowed inside `defer`"),
         ("fn main() { print(1 |> 2) }", "right side of `|>`"),
+        ("enum E { A, B } fn main() { match E::A { E::A => 1 } }", "missing: E::B "),
+        ("fn main() { let x = match 3 { 1 => 1 } }", "missing: _"),
+        ("fn main() { match true { true => 1 } }", "missing: false"),
+        ("enum T { N(i64, bool) } fn main() { match T::N(1, true) { T::N(_, true) => 1 } }", "missing: T::N(_, false)"),
+        ("struct P { x: i64 } fn main() { let p = P { x: 1 }; p.x = 2 }", "cannot assign twice to `p`"),
+        ("struct P { x: i64 } fn main() { let p = P { } }", "missing field(s) in `P`: x"),
+        ("struct P { x: i64 } fn main() { let p = P { x: 1 }; print(p.y) }", "has no field `y`"),
+        ("struct P { x: i64 } impl P { fn f(&self) { self.x = 1 } } fn main() {}", "take `&mut self`"),
+        ("fn f(a: &mut i64) {} fn main() { let x = 1; f(&mut x) }", "declare it with `let mut x`"),
+        ("fn f(a: &mut i64) {} fn main() { let mut x = 1; f(x) }", "pass it as `&mut ...`"),
+        ("fn f(a: &mut i64, b: &mut i64) {} fn main() { let mut x = 1; f(&mut x, &mut x) }", "as `&mut` twice"),
+        ("fn main() { break }", "`break` outside of a loop"),
+        ("fn main() { while true { break 1 } }", "only `loop` can break with a value"),
+        ("fn main() { let x = 1 + 2.0 }", "mismatched types: i64 + f64"),
+        ("struct A { b: B } struct B { a: A } fn main() {}", "contains itself"),
+        ("enum E { A(i64) } fn main() { match E::A(1) { E::A(x, y) => 1 } }", "has 1 field(s), but the pattern has 2"),
+        ("fn main() { let x = 1; x.foo() }", "i64 has no methods yet"),
     ];
     for (src, want) in cases {
         let got = compile_error(src);

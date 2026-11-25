@@ -27,6 +27,7 @@ impl Span {
 pub enum TokenKind {
     // Literals and names
     Int(i64),
+    Float(f64),
     Str(String),
     /// A string containing `{expr}` interpolations.
     InterpStr(Vec<StrPart>),
@@ -40,6 +41,17 @@ pub enum TokenKind {
     While,
     Return,
     Defer,
+    Struct,
+    Enum,
+    Impl,
+    Match,
+    Loop,
+    Break,
+    Continue,
+    For,
+    In,
+    As,
+    Const,
     True,
     False,
     // Punctuation
@@ -51,6 +63,22 @@ pub enum TokenKind {
     Colon,
     Semi,
     Arrow,
+    /// `=>`
+    FatArrow,
+    /// `::`
+    ColonColon,
+    Dot,
+    /// `..`
+    DotDot,
+    /// `..=`
+    DotDotEq,
+    Amp,
+    Pipe,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
     // Operators
     Plus,
     Minus,
@@ -77,6 +105,7 @@ impl fmt::Display for TokenKind {
         use TokenKind::*;
         let s = match self {
             Int(n) => return write!(f, "integer `{n}`"),
+            Float(n) => return write!(f, "number `{n}`"),
             Str(_) | InterpStr(_) => "string literal",
             Ident(name) => return write!(f, "identifier `{name}`"),
             Fn => "`fn`",
@@ -87,6 +116,17 @@ impl fmt::Display for TokenKind {
             While => "`while`",
             Return => "`return`",
             Defer => "`defer`",
+            Struct => "`struct`",
+            Enum => "`enum`",
+            Impl => "`impl`",
+            Match => "`match`",
+            Loop => "`loop`",
+            Break => "`break`",
+            Continue => "`continue`",
+            For => "`for`",
+            In => "`in`",
+            As => "`as`",
+            Const => "`const`",
             True => "`true`",
             False => "`false`",
             LParen => "`(`",
@@ -97,6 +137,18 @@ impl fmt::Display for TokenKind {
             Colon => "`:`",
             Semi => "`;`",
             Arrow => "`->`",
+            FatArrow => "`=>`",
+            ColonColon => "`::`",
+            Dot => "`.`",
+            DotDot => "`..`",
+            DotDotEq => "`..=`",
+            Amp => "`&`",
+            Pipe => "`|`",
+            PlusEq => "`+=`",
+            MinusEq => "`-=`",
+            StarEq => "`*=`",
+            SlashEq => "`/=`",
+            PercentEq => "`%=`",
             Plus => "`+`",
             Minus => "`-`",
             Star => "`*`",
@@ -223,6 +275,15 @@ impl<'a> Lexer<'a> {
         while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
             self.pos += 1;
         }
+        // `1.5` is a float; `1..5` is a range and `1.max()` a method call.
+        if self.peek(0) == Some(b'.') && matches!(self.peek(1), Some(b'0'..=b'9')) {
+            self.pos += 1;
+            while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
+                self.pos += 1;
+            }
+            let text: String = self.src[start..self.pos].chars().filter(|&c| c != '_').collect();
+            return Ok(TokenKind::Float(text.parse().unwrap()));
+        }
         let text: String = self.src[start..self.pos].chars().filter(|&c| c != '_').collect();
         match text.parse::<i64>() {
             Ok(n) => Ok(TokenKind::Int(n)),
@@ -323,6 +384,17 @@ impl<'a> Lexer<'a> {
             "while" => TokenKind::While,
             "return" => TokenKind::Return,
             "defer" => TokenKind::Defer,
+            "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum,
+            "impl" => TokenKind::Impl,
+            "match" => TokenKind::Match,
+            "loop" => TokenKind::Loop,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
+            "as" => TokenKind::As,
+            "const" => TokenKind::Const,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             name => TokenKind::Ident(name.to_string()),
@@ -334,6 +406,16 @@ impl<'a> Lexer<'a> {
         let start = self.pos;
         let two = (self.peek(0).unwrap(), self.peek(1));
         let (kind, len) = match two {
+            (b'.', Some(b'.')) if self.peek(2) == Some(b'=') => (DotDotEq, 3),
+            (b'.', Some(b'.')) => (DotDot, 2),
+            (b'.', _) => (Dot, 1),
+            (b':', Some(b':')) => (ColonColon, 2),
+            (b'=', Some(b'>')) => (FatArrow, 2),
+            (b'+', Some(b'=')) => (PlusEq, 2),
+            (b'-', Some(b'=')) => (MinusEq, 2),
+            (b'*', Some(b'=')) => (StarEq, 2),
+            (b'/', Some(b'=')) => (SlashEq, 2),
+            (b'%', Some(b'=')) => (PercentEq, 2),
             (b'-', Some(b'>')) => (Arrow, 2),
             (b'=', Some(b'=')) => (EqEq, 2),
             (b'!', Some(b'=')) => (NotEq, 2),
@@ -342,6 +424,8 @@ impl<'a> Lexer<'a> {
             (b'&', Some(b'&')) => (AndAnd, 2),
             (b'|', Some(b'|')) => (OrOr, 2),
             (b'|', Some(b'>')) => (PipeGt, 2),
+            (b'&', _) => (Amp, 1),
+            (b'|', _) => (Pipe, 1),
             (b'(', _) => (LParen, 1),
             (b')', _) => (RParen, 1),
             (b'{', _) => (LBrace, 1),
@@ -444,6 +528,33 @@ mod tests {
         assert_eq!(kinds(r#""{{x}}""#), vec![Str("{x}".into()), Eof]);
         assert!(lex(r#""{}""#).unwrap_err().message.contains("empty"));
         assert!(lex(r#""{x""#).unwrap_err().message.contains("unterminated"));
+    }
+
+    #[test]
+    fn ranges_floats_and_paths() {
+        assert_eq!(
+            kinds("0..10 1..=2 3.25 a.b A::B x += 1 =>"),
+            vec![
+                Int(0),
+                DotDot,
+                Int(10),
+                Int(1),
+                DotDotEq,
+                Int(2),
+                Float(3.25),
+                Ident("a".into()),
+                Dot,
+                Ident("b".into()),
+                Ident("A".into()),
+                ColonColon,
+                Ident("B".into()),
+                Ident("x".into()),
+                PlusEq,
+                Int(1),
+                FatArrow,
+                Eof
+            ]
+        );
     }
 
     #[test]

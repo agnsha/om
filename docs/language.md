@@ -1,4 +1,4 @@
-# Language reference (phase 0)
+# Language reference
 
 This page describes what the compiler accepts **today**. Features planned for
 later phases are in the [design document](design.md).
@@ -14,7 +14,8 @@ later phases are in the [design document](design.md).
 
 | Type | Meaning |
 |---|---|
-| `i64` | 64-bit signed integer. Arithmetic wraps on overflow in phase 0. |
+| `i64` | 64-bit signed integer. Arithmetic currently wraps on overflow. |
+| `f64` | 64-bit float. Literals need a digit after the dot: `1.0`, `0.5`. |
 | `bool` | `true` or `false` |
 | `str` | A string literal. Strings can be stored, passed and printed, not yet built at runtime. |
 
@@ -90,6 +91,86 @@ twice, or leaving out one with no default is a compile error.
 *Why:* Rust has no default or named arguments (requested since 2014), so APIs
 fall back to builder types or many function variants.
 
+## Structs and methods
+
+```om
+struct Point { x: f64, y: f64 }
+
+impl Point {
+    fn new(x: f64, y: f64) -> Self { Point { x, y } }        // associated function
+    fn dist2(&self, other: &Point) -> f64 {                   // reads self
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        dx * dx + dy * dy
+    }
+    fn shift(&mut self, dx: f64) { self.x += dx }             // changes self
+}
+
+let mut p = Point::new(1.0, 2.0)
+p.shift(2.0)
+p.y = 10.0
+print(p)                    // Point { x: 3, y: 10 }
+```
+
+Struct values are plain data: assigning one copies it. Any struct or enum can
+be printed with `print`, with no `derive` needed.
+
+## Enums and match
+
+```om
+enum Shape { Circle(f64), Rect(f64, f64), Empty }
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => 3.14159 * r * r,
+        Shape::Rect(w, h) if w > 0.0 => w * h,
+        Shape::Rect(_, _) => 0.0,
+        Shape::Empty => 0.0,
+    }
+}
+```
+
+Patterns: `_`, a name (binds the value), integers, `true`/`false`, ranges
+(`1..=9`, `0..10`), variants with nested patterns, and `A | B`. Inside a match
+on an enum, variants can be written without the enum name (`Circle(r)`).
+Arms may have a guard: `x if x < 0 => ...`.
+
+`match` must cover every case. If it doesn't, the compiler shows an example of
+a value that is not handled:
+
+```text
+error: `match` does not cover every case; missing: Shape::Rect(_, _)
+```
+
+## References: `&T` and `&mut T`
+
+```om
+fn bump(counter: &mut i64, by: i64) { counter += by }
+
+let mut c = 10
+bump(&mut c, 5)      // c is now 15
+```
+
+A `&mut` parameter lets the function change the caller's variable; `&T` gives
+read-only access. Unlike Rust, Om references are parameters only: they cannot
+be stored in structs or returned. That rule is why Om never needs lifetime
+annotations. Internally the value is passed in and its new value handed back
+(mutable value semantics, as in Swift's `inout`), so there are no pointers
+that could dangle. Passing the same variable as `&mut` twice in one call is
+an error.
+
+## Casts
+
+`as` converts between `i64` and `f64` (float to int truncates and saturates,
+like Rust), `bool` to `i64`, and enums with only unit variants to `i64`.
+
+## Constants
+
+```om
+const LIMIT: i64 = 100
+const PI: f64 = 3.14159
+```
+
 ## Control flow
 
 `if` is an expression. Both branches must have the same type, unless one of
@@ -99,14 +180,23 @@ them always returns.
 let size = if n > 100 { "big" } else if n > 10 { "medium" } else { "small" }
 ```
 
-`while` loops while its condition is true:
+Loops:
 
 ```om
 let mut i = 0
-while i < 10 {
-    i = i + 1
+while i < 10 { i += 1 }
+
+for n in 0..10 { print(n) }      // 0 to 9
+for n in 1..=10 { print(n) }     // 1 to 10
+
+let found = loop {               // `loop` can return a value with `break`
+    i += 1
+    if i % 7 == 0 { break i }
 }
 ```
+
+`break` leaves the innermost loop and `continue` skips to its next iteration.
+Compound assignment works on variables and fields: `+= -= *= /= %=`.
 
 Conditions must be `bool`; `if 1 { }` is an error.
 

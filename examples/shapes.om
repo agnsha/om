@@ -1,0 +1,118 @@
+// Structs, enums, methods, match and &mut, in the style of Rust.
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn new(x: f64, y: f64) -> Self {
+        Point { x, y }
+    }
+
+    fn dist2(&self, other: &Point) -> f64 {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        dx * dx + dy * dy
+    }
+
+    fn shift(&mut self, dx: f64, dy: f64 = 0.0) {
+        self.x += dx
+        self.y += dy
+    }
+}
+
+enum Shape {
+    Circle(Point, f64),
+    Rect(Point, Point),
+    Empty,
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle(_, r) => 3.14159 * r * r,
+            Shape::Rect(a, b) => {
+                let w = b.x - a.x
+                let h = b.y - a.y
+                if w * h < 0.0 { -(w * h) } else { w * h }
+            }
+            Shape::Empty => 0.0,
+        }
+    }
+
+    fn name(&self) -> str {
+        match self {
+            Circle(_, _) => "circle",
+            Rect(_, _) => "rectangle",
+            Empty => "nothing",
+        }
+    }
+}
+
+enum Direction { North, East, South, West }
+
+fn turn_right(d: Direction) -> Direction {
+    match d {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+    }
+}
+
+fn classify(n: i64) -> str {
+    match n {
+        0 => "zero",
+        1..=9 => "small",
+        10 | 20 | 30 => "round",
+        x if x < 0 => "negative",
+        _ => "big",
+    }
+}
+
+fn bump(counter: &mut i64, by: i64) {
+    counter += by
+}
+
+fn main() {
+    let mut p = Point::new(1.0, 2.0)
+    p.shift(2.0, dy: 2.0)
+    print(p)
+    print(p.dist2(&Point::new(0.0, 0.0)))
+
+    let shapes = Shape::Circle(p, 2.0)
+    print("{shapes.name()} has area {shapes.area()}")
+    let r = Shape::Rect(Point::new(0.0, 0.0), Point { x: 3.0, y: 4.0 })
+    print("{r.name()} has area {r.area()}")
+    print(Shape::Empty.area())
+
+    let mut d = Direction::North
+    for _ in 0..3 {
+        d = turn_right(d)
+    }
+    print(d)
+    print(d as i64)
+
+    print(classify(0))
+    print(classify(5))
+    print(classify(20))
+    print(classify(-7))
+    print(classify(99))
+
+    let mut total = 0
+    let mut i = 0
+    let found = loop {
+        i += 1
+        if i % 2 == 0 { continue }
+        total += i
+        if total > 20 { break i }
+    }
+    print("stopped at {found}, total {total}")
+
+    let mut c = 10
+    bump(&mut c, 5)
+    print(c)
+    print(7 as f64 / 2.0)
+    print((10.0 / 4.0) as i64 == 2)
+}

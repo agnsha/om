@@ -110,9 +110,13 @@ fn process(n: i64) -> i64 {
 
 See [`examples/modern.om`](examples/modern.om) and the [language reference](docs/language.md).
 
-## The language today (phase 0)
+## The language today
 
-- Types: `i64`, `bool`, `str` (string literals)
+- Types: `i64`, `f64`, `bool`, `str` (string literals), structs and enums
+- Structs, `impl` blocks, methods with `self` / `&self` / `&mut self`
+- Enums with data, `match` with guards, ranges, nested patterns and exhaustiveness checking
+- `&T` and `&mut T` parameters, with no lifetime annotations
+- `for` over ranges, `loop` with `break value`, `continue`, compound assignment, `as` casts, `const`
 - `let` and `let mut`, with optional type annotations
 - Functions with parameters and return types; recursion
 - `if` / `else if` / `else` as expressions, `while`, `return`
@@ -122,7 +126,8 @@ See [`examples/modern.om`](examples/modern.om) and the [language reference](docs
 - Default and named arguments, the `|>` pipeline operator, string interpolation and `defer`
 - `fn main() -> i64` returns the process exit code
 
-See the [language reference](docs/language.md) and the [`examples/`](examples) folder.
+See the [language reference](docs/language.md), the [`examples/`](examples) folder, and the
+[Rust parity checklist](docs/rust-parity.md) for what is done and what is next.
 
 ## How the compiler works
 
@@ -147,9 +152,9 @@ The compiler is written in Rust and split into small crates. See
 |---|---|---|
 | 0 | Lexer, parser, native backend, CLI, tests, CI | ✅ done |
 | 0.5 | Default and named arguments, `\|>`, string interpolation, `defer` | ✅ done |
-| 1 | Core language: more integer types, `for` loops, better errors, `om-check` crate | next |
-| 2 | Structs, move semantics, scoped borrows, ownership checker | planned |
-| 3 | Enums, pattern matching, generics, interfaces, `Result` and `?` | planned |
+| 1 | Loops, `f64`, structs, methods, enums, `match`, `&`/`&mut` parameters | ✅ done |
+| 2 | Generics, traits, `Option`/`Result` and `?`, tuples, arrays, `if let` | next |
+| 3 | Heap types (`String`, `Vec`, `Box`), move checking, closures, iterators | planned |
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
 | 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |
