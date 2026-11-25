@@ -617,12 +617,20 @@ fn borrowed_list_loops_self_constructors_and_string_eq() {
 
 /// Build `src` and run it with `input` on stdin; return stdout.
 fn run_with_input(src: &str, name: &str, input: &[u8]) -> String {
+    run_with_args(src, name, &[], input)
+}
+
+fn run_with_args(src: &str, name: &str, args: &[&str], input: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
     let exe = std::env::temp_dir().join(format!("om-test-{name}-{}{EXE}", std::process::id()));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
-    let mut child =
-        Command::new(&exe).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("run compiled program");
+    let mut child = Command::new(&exe)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run compiled program");
     child.stdin.take().unwrap().write_all(input).unwrap();
     let out = child.wait_with_output().unwrap();
     let _ = std::fs::remove_file(&exe);
@@ -664,6 +672,71 @@ fn hollow_bell_game_builds_and_quits() {
     assert!(out.contains("T H E    H O L L O W    B E L L"), "{out}");
     assert!(out.contains("Depth 1/6"), "{out}");
     assert!(out.contains("Seed 42"), "{out}");
+}
+
+/// Text a terminal would show, with escape sequences taken out.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[test]
+fn emberdeep_renders_and_plays() {
+    let src = std::fs::read_to_string(root().join("games/emberdeep/emberdeep.om")).unwrap();
+    // Draw 200 frames of the first level (with the HUD), then let the autopilot
+    // play two whole games.
+    let frames = strip_ansi(&run_with_args(&src, "emberdeep_bench", &["7", "--bench"], b""));
+    assert!(frames.contains("DEPTH 1/6"), "{frames}");
+    assert!(frames.contains("EMBERS"), "{frames}");
+    let sim = run_with_args(&src, "emberdeep_sim", &["--sim", "2"], b"");
+    assert!(sim.starts_with("2 games: "), "{sim}");
+    // Start a game from the title screen and quit at the end of input.
+    run_with_input(&src, "emberdeep", b"\n");
+}
+
+#[test]
+fn conveniences_from_writing_a_3d_game() {
+    let src = r#"
+        struct Player { name: String, hp: f64 = 100.0, bag: Vec[i64] = Vec::new(), lives: i64 = LIVES }
+        const LIVES: i64 = 3
+        fn pair(a: i64, b: i64) -> (i64, i64) {
+            let s = a + b
+            (s, a * b)
+        }
+        fn main() {
+            // Struct fields can have defaults.
+            let mut p = Player { name: "ash" }
+            p.bag.push(7)
+            let q = Player { name: "bo", lives: 9 }
+            print("{p.name} {p.hp} {p.bag} {p.lives} {q.lives}")
+            // Integers of different types compare by value.
+            let v = [1, 2, 3]
+            let mut i = -1
+            let mut n = 0
+            while i < v.len() { i += 1; n += 1 }
+            let big: u64 = 18446744073709551615
+            let neg = -1
+            print("{n} {neg < v.len()} {big > i} {3u8 == 3i64}")
+            // A `(` that starts a line is not a call of the line before.
+            print(pair(2, 3))
+        }
+    "#;
+    assert_eq!(build_and_run(src, "conveniences_3d"), "ash 100 [7] 3 9\n4 true true true\n(5, 6)\n");
 }
 
 #[test]

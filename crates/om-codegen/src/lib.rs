@@ -512,6 +512,7 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
         queue: Vec::new(),
         strings: HashMap::new(),
         structs: HashMap::new(),
+        struct_defaults: HashMap::new(),
         enums: HashMap::new(),
         consts: HashMap::new(),
         traits: HashMap::new(),
@@ -636,6 +637,8 @@ struct Codegen {
     queue: Vec<(String, String, Subst)>,
     strings: HashMap<String, DataId>,
     structs: HashMap<String, StructShape>,
+    /// Field defaults from struct declarations, in field order.
+    struct_defaults: HashMap<String, Vec<Option<Expr>>>,
     enums: HashMap<String, EnumShape>,
     consts: HashMap<String, (Ty, Expr)>,
     traits: HashMap<String, TraitDef>,
@@ -884,6 +887,9 @@ impl Codegen {
                 return err(format!("type `{}` is defined twice", s.name), s.span);
             }
             self.structs.insert(s.name.clone(), (s.generics.clone(), s.fields.clone()));
+            if s.defaults.iter().any(Option::is_some) {
+                self.struct_defaults.insert(s.name.clone(), s.defaults.clone());
+            }
         }
         for e in &p.enums {
             if self.structs.contains_key(&e.name) || self.enums.contains_key(&e.name) {
@@ -2994,6 +3000,22 @@ impl<'a> Lower<'a> {
             };
             return self.int_binop(op, *a, lv[0], rv[0], span);
         }
+        if let (true, Ty::Int(a), Ty::Int(b)) = (op.is_comparison(), &lt, &rt) {
+            if a != b {
+                // Integers of different types compare by value, as mathematics does:
+                // `i < list.len()` with `i: i64` just works, and a negative `i` is less.
+                let wide = |this: &mut Self, t: &IntTy, v: Value| {
+                    if t.signed() {
+                        this.b.ins().sextend(types::I128, v)
+                    } else {
+                        this.b.ins().uextend(types::I128, v)
+                    }
+                };
+                let l = wide(self, a, lv[0]);
+                let r = wide(self, b, rv[0]);
+                return Ok((vec![self.b.ins().icmp(sint_cc(op), l, r)], Ty::Bool));
+            }
+        }
         if lt != rt {
             return err(format!("mismatched types: {lt} {} {rt} (convert with `as`)", op.symbol()), span);
         }
@@ -3400,6 +3422,16 @@ impl<'a> Lower<'a> {
             }
             let (v, _) = self.infer_arg(value, &defs[i].1, &generics, &mut subst, &format!("field `{f}`"))?;
             given[i] = Some(v);
+        }
+        // Fields left out take the default from the declaration, if it has one.
+        if let Some(defaults) = self.cg.struct_defaults.get(&name).cloned() {
+            for (i, d) in defaults.iter().enumerate() {
+                if let (None, Some(d)) = (&given[i], d) {
+                    let what = format!("the default for field `{}`", defs[i].0);
+                    let (v, _) = self.infer_arg(d, &defs[i].1, &generics, &mut subst, &what)?;
+                    given[i] = Some(v);
+                }
+            }
         }
         let missing: Vec<&str> =
             defs.iter().zip(&given).filter(|(_, g)| g.is_none()).map(|((n, _), _)| n.as_str()).collect();
@@ -5297,6 +5329,7 @@ pub const RUNTIME_C: &str = r#"#ifdef _WIN32
 #include <unistd.h>
 #endif
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5498,14 +5531,28 @@ __declspec(allocate(".CRT$XCU")) void (*om_win_init_ptr)(void) = om_win_init;
 #else
 __attribute__((constructor)) static void om_win_init_ctor(void) { om_win_init(); }
 #endif
+/* Ctrl+C: restore the console (colours, cursor, main screen) before stopping. */
+static void om_win_interrupt(int sig) {
+    (void)sig;
+    fputs("\x1b[0m\x1b[?25h\x1b[?1049l\n", stdout);
+    om_win_restore();
+    _exit(130);
+}
+static void om_win_keys_init(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    signal(SIGINT, om_win_interrupt);
+}
 long long om_rt_read_key(void) {
     fflush(stdout);
     if (!_isatty(_fileno(stdin))) { int c = getchar(); return c == EOF ? -1 : c; }
+    om_win_keys_init();
     int c = _getch();
     if (c == 0 || c == 0xE0) {
         switch (_getch()) { case 72: return 1000; case 80: return 1001; case 77: return 1002; case 75: return 1003; default: return 0; }
     }
-    if (c == 3) exit(130); /* Ctrl+C still ends the program, as on Linux and macOS. */
+    if (c == 3) om_win_interrupt(SIGINT); /* Ctrl+C still ends the program, as on Linux and macOS. */
     return c == '\r' ? '\n' : c;
 }
 long long om_rt_time_ns(void) {
@@ -5519,6 +5566,7 @@ void om_rt_sleep_ms(long long ms) { fflush(stdout); if (ms > 0) Sleep((DWORD)ms)
 long long om_rt_poll_key(void) {
     fflush(stdout);
     if (!_isatty(_fileno(stdin))) { int c = getchar(); return c == EOF ? -1 : c; }
+    om_win_keys_init();
     return _kbhit() ? om_rt_read_key() : 0;
 }
 static int om_console_size(int rows) {
@@ -5558,12 +5606,24 @@ static int om_getc(int wait_ms) {
     return read(0, &c, 1) == 1 ? c : -1;
 }
 static int om_tty_saved_;
+/* Ctrl+C in a program that reads keys: put the terminal back the way it was
+   (input mode, colours, cursor, main screen) before stopping, so a game that
+   hid the cursor or used the alternate screen does not leave a broken terminal. */
+static void om_on_interrupt(int sig) {
+    (void)sig;
+    om_restore_tty();
+    static const char reset[] = "\x1b[0m\x1b[?25h\x1b[?1049l\n";
+    ssize_t w = write(1, reset, sizeof reset - 1);
+    (void)w;
+    _exit(130);
+}
 static void om_enter_raw(void) {
     if (om_tty_raw_ || !isatty(0)) return;
     if (!om_tty_saved_) {
         if (tcgetattr(0, &om_saved_tty_) != 0) return;
         om_tty_saved_ = 1;
         atexit(om_restore_tty);
+        if (signal(SIGINT, om_on_interrupt) == SIG_IGN) signal(SIGINT, SIG_IGN);
     }
     struct termios raw = om_saved_tty_;
     raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO);

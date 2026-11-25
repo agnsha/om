@@ -1,0 +1,2215 @@
+// Emberdeep: a first-person descent by lantern light, drawn in true-colour
+// terminal graphics. Your lantern is your life; the dark has eyes.
+//
+// Run with `om run games/emberdeep/emberdeep.om` (optionally followed by a seed).
+
+const RESET: str = "\x1b[0m"
+
+// Map cells. Anything but C_FLOOR is solid.
+const C_FLOOR: i64 = 0
+const C_BRICK: i64 = 1
+const C_STONE: i64 = 2
+const C_MOSS: i64 = 3
+const C_CRYSTAL: i64 = 4
+const C_GATE: i64 = 5
+
+// Textures: one per wall kind (cell - 1), then the floor and the ceiling.
+const TS: i64 = 32
+const TX_FLOOR: i64 = 5
+const TX_CEIL: i64 = 6
+const TX_ROOT: i64 = 7
+const NTEX: i64 = 8
+const EMISSIVE: i64 = 0x1000000
+
+// Things in the world.
+const E_EMBER: i64 = 0
+const E_OIL: i64 = 1
+const E_BRAZIER: i64 = 2
+const E_SHADE: i64 = 3
+const E_HOUND: i64 = 4
+
+// Shade and hound states.
+const S_HUNT: i64 = 0
+const S_LUNGE: i64 = 1
+const S_DYING: i64 = 2
+const H_SLEEP: i64 = 0
+const H_HUNT: i64 = 1
+const H_FLEE: i64 = 2
+
+// Screens.
+const M_TITLE: i64 = 0
+const M_PLAY: i64 = 1
+const M_PAUSE: i64 = 2
+const M_DEAD: i64 = 3
+const M_WON: i64 = 4
+const M_HELP: i64 = 5
+
+const LAST_DEPTH: i64 = 6
+const NEED_EMBERS: i64 = 3
+const PLANE: f64 = 0.75
+const MAX_VIEW: f64 = 22.0
+const OIL_MAX: f64 = 100.0
+const FLARE_COST: f64 = 20.0
+const BRAZIER_COST: f64 = 12.0
+
+const K_UP: i64 = 1000
+const K_DOWN: i64 = 1001
+const K_RIGHT: i64 = 1002
+const K_LEFT: i64 = 1003
+const K_ESC: i64 = 27
+const K_ENTER: i64 = 10
+
+struct Ent {
+    kind: i64,
+    x: f64,
+    y: f64,
+    hp: f64,
+    state: i64,
+    timer: f64,
+    phase: f64,
+    cool: f64,
+    alive: bool,
+}
+
+struct Light { x: f64, y: f64, r: f64, g: f64, b: f64, rad: f64 }
+
+struct Game {
+    rng: u64,
+    seed: u64,
+    mode: i64 = M_TITLE,
+    depth: i64 = 1,
+    // The level.
+    mw: i64 = 0,
+    mh: i64 = 0,
+    map: Vec[i64] = Vec::new(),
+    seen: Vec[bool] = Vec::new(),
+    dist: Vec[i64] = Vec::new(),
+    queue: Vec[i64] = Vec::new(),
+    gate_x: i64 = 0,
+    gate_y: i64 = 0,
+    gate_open: bool = false,
+    crystals: Vec[Light] = Vec::new(),
+    lm_r: Vec[f64] = Vec::new(),
+    lm_g: Vec[f64] = Vec::new(),
+    lm_b: Vec[f64] = Vec::new(),
+    ents: Vec[Ent] = Vec::new(),
+    // The player.
+    px: f64 = 0.0,
+    py: f64 = 0.0,
+    pa: f64 = 0.0,
+    vf: f64 = 0.0,
+    vs: f64 = 0.0,
+    vt: f64 = 0.0,
+    bob: f64 = 0.0,
+    oil: f64 = OIL_MAX,
+    hp: f64 = 100.0,
+    embers: i64 = 0,
+    flare: f64 = 0.0,
+    flare_x: f64 = 0.0,
+    flare_y: f64 = 0.0,
+    hurt: f64 = 0.0,
+    dread: f64 = 0.0,
+    safe: f64 = 0.0,
+    // Pacing and stats.
+    t: f64 = 0.0,
+    level_t: f64 = 0.0,
+    spawn_t: f64 = 0.0,
+    path_t: f64 = 0.0,
+    intro: f64 = 0.0,
+    msg: String = String::new(),
+    msg_t: f64 = 0.0,
+    flares_used: i64 = 0,
+    shades_burned: i64 = 0,
+    oil_found: i64 = 0,
+    show_map: bool = false,
+    help_from_title: bool = false,
+    anim_t: f64 = 0.0,
+    pulse: f64 = 1.0,
+    lantern_r: f64 = 6.0,
+    lantern_i: f64 = 1.0,
+    // Input: impulse timers for terminals that only report presses.
+    k_fwd: f64 = 0.0,
+    k_back: f64 = 0.0,
+    k_left: f64 = 0.0,
+    k_right: f64 = 0.0,
+    k_tl: f64 = 0.0,
+    k_tr: f64 = 0.0,
+    last_key_t: f64 = -10.0,
+    precise: bool,
+    dev: bool = false,
+    // The autopilot, for the balance simulation.
+    bot: bool = false,
+    bot_map: Vec[i64] = Vec::new(),
+    bot_t: f64 = 0.0,
+    bot_goal: i64 = -1,
+    killer: i64 = -1,
+    bot_alarm: f64 = 0.0,
+    // The screen.
+    cols: i64 = 0,
+    rows: i64 = 0,
+    sw: i64 = 0,
+    sh: i64 = 0,
+    vsc: f64 = 1.0,
+    fb: Vec[i64] = Vec::new(),
+    zbuf: Vec[f64] = Vec::new(),
+    tex: Vec[i64],
+    ov_ch: Vec[char] = Vec::new(),
+    ov_fg: Vec[i64] = Vec::new(),
+    prev_ch: Vec[char] = Vec::new(),
+    prev_fg: Vec[i64] = Vec::new(),
+    prev_bg: Vec[i64] = Vec::new(),
+    out: String = String::new(),
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+
+fn clampf(x: f64, lo: f64, hi: f64) -> f64 { if x < lo { lo } else if x > hi { hi } else { x } }
+
+fn rgb(r: f64, g: f64, b: f64) -> i64 {
+    let ri = clampf(r, 0.0, 255.0) as i64
+    let gi = clampf(g, 0.0, 255.0) as i64
+    let bi = clampf(b, 0.0, 255.0) as i64
+    (ri << 16) | (gi << 8) | bi
+}
+
+fn cr(c: i64) -> f64 { ((c >> 16) & 255) as f64 }
+fn cg(c: i64) -> f64 { ((c >> 8) & 255) as f64 }
+fn cb(c: i64) -> f64 { (c & 255) as f64 }
+
+fn mix(a: i64, b: i64, t: f64) -> i64 {
+    rgb(cr(a) + (cr(b) - cr(a)) * t, cg(a) + (cg(b) - cg(a)) * t, cb(a) + (cb(b) - cb(a)) * t)
+}
+
+fn scale(c: i64, k: f64) -> i64 { rgb(cr(c) * k, cg(c) * k, cb(c) * k) }
+
+fn hash(x: i64, y: i64, s: i64) -> f64 {
+    let mut h = (x * 374761393 + y * 668265263 + s * 1442695041) as u64
+    h = (h ^ (h >> 13)) * 1274126177
+    h = h ^ (h >> 16)
+    ((h & 0xFFFFFF) as i64) as f64 / 16777216.0
+}
+
+// Smooth value noise that wraps every `period` units, so textures tile.
+fn vnoise(x: f64, y: f64, period: i64, s: i64) -> f64 {
+    let xi = x.floor() as i64
+    let yi = y.floor() as i64
+    let fx = x - xi as f64
+    let fy = y - yi as f64
+    let ux = fx * fx * (3.0 - 2.0 * fx)
+    let uy = fy * fy * (3.0 - 2.0 * fy)
+    let x0 = xi.rem_euclid(period)
+    let x1 = (xi + 1).rem_euclid(period)
+    let y0 = yi.rem_euclid(period)
+    let y1 = (yi + 1).rem_euclid(period)
+    let a = hash(x0, y0, s)
+    let b = hash(x1, y0, s)
+    let c = hash(x0, y1, s)
+    let d = hash(x1, y1, s)
+    let top = a + (b - a) * ux
+    let bot = c + (d - c) * ux
+    top + (bot - top) * uy
+}
+
+fn fbm(x: f64, y: f64, period: i64, s: i64) -> f64 {
+    0.5 * vnoise(x, y, period, s) + 0.3 * vnoise(x * 2.0, y * 2.0, period * 2, s + 1) + 0.2 * vnoise(x * 4.0, y * 4.0, period * 4, s + 2)
+}
+
+// One texel of texture `t`, packed RGB, with EMISSIVE set on glowing texels.
+fn texel(t: i64, x: i64, y: i64) -> i64 {
+    let fx = x as f64 / 8.0
+    let fy = y as f64 / 8.0
+    let n = fbm(fx, fy, 4, t * 17 + 3)
+    if t == 0 {
+        // Brick: four courses of 16x8 bricks, every other course offset.
+        let row = y / 8
+        let off = if row % 2 == 0 { 0 } else { 8 }
+        let col = (x + off) / 16
+        let bx = (x + off) % 16
+        let by = y % 8
+        if by == 7 || bx == 15 {
+            let m = 0.22 + 0.12 * n
+            return rgb(m * 170.0, m * 160.0, m * 150.0)
+        }
+        let v = hash(col, row, 5) * 0.35 + 0.65
+        let k = v * (0.7 + 0.55 * n)
+        let edge = if by == 0 || bx == 0 { 1.15 } else { 1.0 }
+        rgb(150.0 * k * edge, 72.0 * k * edge, 52.0 * k * edge)
+    } else if t == 1 || t == 2 {
+        // Rough stone in large blocks, with cracks; moss grows on some of it.
+        let k = 0.45 + 0.7 * n
+        let crack = fbm(fx * 0.7, fy * 0.7, 3, 91)
+        let mut c = rgb(108.0 * k, 102.0 * k, 96.0 * k)
+        if (crack - 0.5).abs() < 0.018 { c = scale(c, 0.35) }
+        if y % 16 == 0 { c = scale(c, 0.55) }
+        if t == 2 {
+            let m = fbm(fx * 1.3, fy * 1.3, 5, 44) + (y as f64 / 32.0) * 0.25
+            if m > 0.62 {
+                let g = 0.6 + 0.6 * hash(x, y, 7)
+                c = rgb(46.0 * g, 105.0 * g, 38.0 * g)
+            }
+        }
+        c
+    } else if t == 3 {
+        // Dark rock with veins of glowing crystal.
+        let k = 0.5 + 0.6 * n
+        let v = fbm(fx * 0.9 + 3.0, fy * 0.5, 4, 61)
+        let ridge = 1.0 - ((v - 0.5).abs() * 16.0)
+        if ridge > 0.0 {
+            let g = 0.35 + 0.65 * ridge
+            return rgb(90.0 * g, 210.0 * g, 255.0 * g) | EMISSIVE
+        }
+        rgb(42.0 * k, 36.0 * k, 54.0 * k)
+    } else if t == 4 {
+        // The gate: iron with bars and rivets. The sockets are drawn live.
+        let k = 0.6 + 0.5 * n
+        let mut c = rgb(58.0 * k, 52.0 * k, 50.0 * k)
+        if x % 8 >= 3 && x % 8 <= 5 { c = rgb(92.0 * k, 86.0 * k, 80.0 * k) }
+        if y == 2 || y == 3 || y == 28 || y == 29 { c = rgb(80.0 * k, 70.0 * k, 60.0 * k) }
+        if (y == 2 || y == 28) && x % 8 == 4 { c = rgb(160.0, 150.0, 130.0) }
+        c
+    } else if t == 5 {
+        // Floor flagstones.
+        let tile = hash(x / 16, y / 16, 9) * 0.3 + 0.7
+        if x % 16 == 0 || y % 16 == 0 {
+            return rgb(30.0, 27.0, 24.0)
+        }
+        let k = tile * (0.55 + 0.6 * n)
+        rgb(92.0 * k, 86.0 * k, 78.0 * k)
+    } else if t == 6 {
+        let k = 0.45 + 0.7 * n
+        rgb(44.0 * k, 40.0 * k, 38.0 * k)
+    } else {
+        // Roots and packed earth, for the deepest levels.
+        let k = 0.5 + 0.6 * n
+        let r = fbm(fx * 2.0, fy * 0.5, 8, 33)
+        if r > 0.6 { return rgb(96.0 * k, 64.0 * k, 40.0 * k) }
+        rgb(60.0 * k, 44.0 * k, 34.0 * k)
+    }
+}
+
+fn dx4(d: i64) -> i64 { if d == 0 { 1 } else if d == 1 { -1 } else { 0 } }
+fn dy4(d: i64) -> i64 { if d == 2 { 1 } else if d == 3 { -1 } else { 0 } }
+
+fn push_num(out: &mut String, n: i64) {
+    if n < 0 {
+        out.push_byte(45)
+        push_num(&mut out, -n)
+        return
+    }
+    if n >= 10 { push_num(&mut out, n / 10) }
+    out.push_byte((48 + n % 10) as u8)
+}
+
+fn push_color(out: &mut String, fg: bool, c: i64) {
+    out.push_str(if fg { "\x1b[38;2;" } else { "\x1b[48;2;" })
+    push_num(&mut out, (c >> 16) & 255)
+    out.push_byte(59)
+    push_num(&mut out, (c >> 8) & 255)
+    out.push_byte(59)
+    push_num(&mut out, c & 255)
+    out.push_byte(109)
+}
+
+fn bar(v: f64, max: f64, n: i64) -> String {
+    let full = clampf(v / max * n as f64 + 0.5, 0.0, n as f64) as i64
+    let mut s = String::new()
+    for i in 0..n { s.push(if i < full { '█' } else { '░' }) }
+    s
+}
+
+// ---------------------------------------------------------------------------
+
+impl Game {
+    fn new(seed: u64) -> Game {
+        let mut g = Game {
+            rng: seed * 2654435761 + 88172645463325252,
+            seed: seed,
+            precise: key_down('w' as i64) >= 0,
+            tex: [0; NTEX * TS * TS],
+        }
+        for t in 0..NTEX {
+            for y in 0..TS {
+                for x in 0..TS { g.tex[(t * TS + y) * TS + x] = texel(t, x, y) }
+            }
+        }
+        g
+    }
+
+    // --- random numbers -----------------------------------------------------
+
+    fn rand(&mut self) -> u64 {
+        let mut x = self.rng
+        x ^= x >> 12
+        x ^= x << 25
+        x ^= x >> 27
+        self.rng = x
+        x * 0x2545F4914F6CDD1D
+    }
+    fn rn(&mut self, n: i64) -> i64 { if n <= 0 { 0 } else { ((self.rand() >> 1) % (n as u64)) as i64 } }
+    fn rf(&mut self) -> f64 { ((self.rand() >> 11) as i64) as f64 / 9007199254740992.0 }
+
+    // --- the map ------------------------------------------------------------
+
+    fn cell(&self, x: i64, y: i64) -> i64 {
+        if x < 0 || y < 0 || x >= self.mw || y >= self.mh { C_STONE } else { self.map[y * self.mw + x] }
+    }
+    fn solid(&self, x: i64, y: i64) -> bool { self.cell(x, y) != C_FLOOR }
+    fn solid_at(&self, x: f64, y: f64) -> bool { self.solid(x.floor() as i64, y.floor() as i64) }
+    fn set(&mut self, x: i64, y: i64, c: i64) {
+        if x >= 0 && y >= 0 && x < self.mw && y < self.mh { self.map[y * self.mw + x] = c }
+    }
+
+    fn wall_kind(&mut self) -> i64 {
+        if self.depth <= 2 { C_BRICK } else if self.depth == 5 { if self.rn(3) == 0 { C_BRICK } else { C_STONE } } else { C_STONE }
+    }
+
+    fn reset_map(&mut self, w: i64, h: i64) {
+        self.mw = w
+        self.mh = h
+        let n = w * h
+        self.map = [C_STONE; n]
+        self.seen = [false; n]
+        self.dist = [-1; n]
+        self.lm_r = [0.0; n]
+        self.lm_g = [0.0; n]
+        self.lm_b = [0.0; n]
+        self.ents.clear()
+        self.crystals.clear()
+    }
+
+    // Rooms joined by corridors, for the upper (built) levels.
+    fn gen_rooms(&mut self) {
+        self.reset_map(33, 33)
+        let wk = self.wall_kind()
+        for i in 0..self.mw * self.mh { self.map[i] = wk }
+        let mut rooms: Vec[(i64, i64, i64, i64)] = Vec::new()
+        let mut tries = 0
+        while tries < 400 && rooms.len() < 11 {
+            tries += 1
+            let w = 3 + self.rn(5)
+            let h = 3 + self.rn(5)
+            let x = 1 + self.rn(self.mw - w - 2)
+            let y = 1 + self.rn(self.mh - h - 2)
+            let mut ok = true
+            for r in &rooms {
+                if x - 1 <= r.0 + r.2 && x + w + 1 >= r.0 && y - 1 <= r.1 + r.3 && y + h + 1 >= r.1 { ok = false }
+            }
+            if !ok { continue }
+            for yy in y..y + h {
+                for xx in x..x + w { self.set(xx, yy, C_FLOOR) }
+            }
+            rooms.push((x, y, w, h))
+        }
+        let n = rooms.len()
+        for i in 1..n + 2 {
+            let a = rooms[i % n]
+            let b = if i < n { rooms[i - 1] } else { rooms[self.rn(n as i64)] }
+            self.corridor(a.0 + a.2 / 2, a.1 + a.3 / 2, b.0 + b.2 / 2, b.1 + b.3 / 2)
+        }
+        // Pillars in some of the bigger rooms.
+        for r in &rooms {
+            if r.2 >= 6 && r.3 >= 6 && self.rn(2) == 0 {
+                self.set(r.0 + 1, r.1 + 1, wk)
+                self.set(r.0 + r.2 - 2, r.1 + 1, wk)
+                self.set(r.0 + 1, r.1 + r.3 - 2, wk)
+                self.set(r.0 + r.2 - 2, r.1 + r.3 - 2, wk)
+            }
+        }
+        self.decorate()
+    }
+
+    fn corridor(&mut self, x0: i64, y0: i64, x1: i64, y1: i64) {
+        let mut x = x0
+        let mut y = y0
+        let horizontal_first = self.rn(2) == 0
+        if horizontal_first {
+            while x != x1 { self.set(x, y, C_FLOOR); x += if x1 > x { 1 } else { -1 } }
+            while y != y1 { self.set(x, y, C_FLOOR); y += if y1 > y { 1 } else { -1 } }
+        } else {
+            while y != y1 { self.set(x, y, C_FLOOR); y += if y1 > y { 1 } else { -1 } }
+            while x != x1 { self.set(x, y, C_FLOOR); x += if x1 > x { 1 } else { -1 } }
+        }
+        self.set(x, y, C_FLOOR)
+    }
+
+    // Caverns from a cellular automaton, for the natural levels.
+    fn gen_cave(&mut self) {
+        self.reset_map(40, 40)
+        for y in 0..self.mh {
+            for x in 0..self.mw {
+                let edge = x == 0 || y == 0 || x == self.mw - 1 || y == self.mh - 1
+                let c = if edge || self.rn(100) < 45 { C_STONE } else { C_FLOOR }
+                self.set(x, y, c)
+            }
+        }
+        for _ in 0..5 {
+            let mut next = self.map.clone()
+            for y in 1..self.mh - 1 {
+                for x in 1..self.mw - 1 {
+                    let mut walls = 0
+                    for dy in -1..2 {
+                        for dx in -1..2 {
+                            if self.solid(x + dx, y + dy) { walls += 1 }
+                        }
+                    }
+                    next[y * self.mw + x] = if walls >= 5 { C_STONE } else { C_FLOOR }
+                }
+            }
+            self.map = next
+        }
+        // Keep only the biggest connected cave.
+        let mut best = -1
+        let mut best_n = 0
+        let mut label = [-1; self.mw * self.mh]
+        let mut stack: Vec[i64] = Vec::new()
+        for start in 0..self.mw * self.mh {
+            if self.map[start] != C_FLOOR || label[start] >= 0 { continue }
+            let mut count = 0
+            stack.push(start)
+            label[start] = start
+            while stack.len() > 0 {
+                let i = stack.pop().unwrap()
+                count += 1
+                let x = i % self.mw
+                let y = i / self.mw
+                for d in 0..4 {
+                    let nx = x + dx4(d)
+                    let ny = y + dy4(d)
+                    if !self.solid(nx, ny) && label[ny * self.mw + nx] < 0 {
+                        label[ny * self.mw + nx] = start
+                        stack.push(ny * self.mw + nx)
+                    }
+                }
+            }
+            if count > best_n { best_n = count; best = start }
+        }
+        for i in 0..self.mw * self.mh {
+            if self.map[i] == C_FLOOR && label[i] != best { self.map[i] = C_STONE }
+        }
+        self.decorate()
+    }
+
+    // Moss, roots and crystal veins on the walls that face open floor.
+    fn decorate(&mut self) {
+        let deep = self.depth >= 6
+        for y in 0..self.mh {
+            for x in 0..self.mw {
+                let c = self.cell(x, y)
+                if c == C_FLOOR { continue }
+                let n = vnoise(x as f64 / 4.0, y as f64 / 4.0, 1000, self.depth * 7)
+                if c == C_STONE && n > 0.6 { self.set(x, y, C_MOSS) }
+                if deep && n < 0.3 { self.set(x, y, C_MOSS) }
+            }
+        }
+        let clusters = if self.depth >= 3 { 3 + self.depth } else { 1 }
+        let mut made = 0
+        let mut guard = 0
+        while made < clusters && guard < 2000 {
+            guard += 1
+            let x = 1 + self.rn(self.mw - 2)
+            let y = 1 + self.rn(self.mh - 2)
+            if !self.solid(x, y) || !self.faces_floor(x, y) { continue }
+            self.set(x, y, C_CRYSTAL)
+            for d in 0..8 {
+                let nx = x + [1, -1, 0, 0, 1, 1, -1, -1][d]
+                let ny = y + [0, 0, 1, -1, 1, -1, 1, -1][d]
+                if self.solid(nx, ny) && nx > 0 && ny > 0 && nx < self.mw - 1 && ny < self.mh - 1 && self.rn(2) == 0 {
+                    self.set(nx, ny, C_CRYSTAL)
+                }
+            }
+            made += 1
+        }
+    }
+
+    fn faces_floor(&self, x: i64, y: i64) -> bool {
+        !self.solid(x + 1, y) || !self.solid(x - 1, y) || !self.solid(x, y + 1) || !self.solid(x, y - 1)
+    }
+
+    fn open_around(&self, x: i64, y: i64) -> i64 {
+        let mut n = 0
+        for dy in -1..2 {
+            for dx in -1..2 {
+                if !self.solid(x + dx, y + dy) { n += 1 }
+            }
+        }
+        n
+    }
+
+    // Breadth-first distances over the floor from (sx, sy), into self.dist.
+    fn flood(&mut self, sx: i64, sy: i64) {
+        self.dist = self.flood_map(sx, sy)
+    }
+
+    // Breadth-first step counts over the floor from (sx, sy); -1 where unreachable.
+    fn flood_map(&mut self, sx: i64, sy: i64) -> Vec[i64] {
+        let mut dist = [-1; self.mw * self.mh]
+        self.queue.clear()
+        if self.solid(sx, sy) { return dist }
+        dist[sy * self.mw + sx] = 0
+        self.queue.push(sy * self.mw + sx)
+        let mut head = 0
+        while head < self.queue.len() {
+            let i = self.queue[head]
+            head += 1
+            let x = i % self.mw
+            let y = i / self.mw
+            for d in 0..4 {
+                let nx = x + dx4(d)
+                let ny = y + dy4(d)
+                if self.solid(nx, ny) { continue }
+                let ni = ny * self.mw + nx
+                if dist[ni] >= 0 { continue }
+                dist[ni] = dist[i] + 1
+                self.queue.push(ni)
+            }
+        }
+        dist
+    }
+
+    fn add_ent(&mut self, kind: i64, x: f64, y: f64) {
+        let phase = self.rf() * 6.28
+        self.ents.push(Ent { kind: kind, x: x, y: y, hp: 1.0, state: 0, timer: 0.0, phase: phase, cool: 0.0, alive: true })
+    }
+
+    // A random floor cell whose distance from the start is in [lo, hi] and that
+    // nothing else stands on.
+    fn pick_cell(&mut self, lo: i64, hi: i64, min_open: i64) -> (i64, i64) {
+        for _ in 0..3000 {
+            let x = self.rn(self.mw)
+            let y = self.rn(self.mh)
+            let d = self.dist[y * self.mw + x]
+            if d < lo || d > hi || self.open_around(x, y) < min_open { continue }
+            let mut free = true
+            for e in &self.ents {
+                if e.x.floor() as i64 == x && e.y.floor() as i64 == y { free = false }
+            }
+            if free { return (x, y) }
+        }
+        (-1, -1)
+    }
+
+    fn gen_level(&mut self) {
+        let cave = self.depth == 3 || self.depth == 4 || self.depth == 6
+        let mut tries = 0
+        loop {
+            tries += 1
+            if cave { self.gen_cave() } else { self.gen_rooms() }
+            if self.place_things() || tries > 50 { break }
+        }
+        self.bake()
+        self.level_t = 0.0
+        self.spawn_t = 10.0
+        self.gate_open = false
+        self.embers = 0
+        self.flare = 0.0
+        self.intro = 3.0
+    }
+
+    fn place_things(&mut self) -> bool {
+        // Start somewhere with room to turn around.
+        let mut sx = -1
+        let mut sy = -1
+        for _ in 0..2000 {
+            let x = self.rn(self.mw)
+            let y = self.rn(self.mh)
+            if !self.solid(x, y) && self.open_around(x, y) >= 8 { sx = x; sy = y; break }
+        }
+        if sx < 0 { return false }
+        self.flood(sx, sy)
+        let mut far = 0
+        let mut fx = 0
+        let mut fy = 0
+        let mut floor = 0
+        for y in 0..self.mh {
+            for x in 0..self.mw {
+                let d = self.dist[y * self.mw + x]
+                if d >= 0 { floor += 1 }
+                // The gate goes in a wall beside the farthest reachable floor.
+                if d > far && self.gate_spot(x, y).0 >= 0 { far = d; fx = x; fy = y }
+            }
+        }
+        if far < 22 || floor < 200 { return false }
+        let gs = self.gate_spot(fx, fy)
+        self.gate_x = gs.0
+        self.gate_y = gs.1
+        self.set(self.gate_x, self.gate_y, C_GATE)
+        self.px = sx as f64 + 0.5
+        self.py = sy as f64 + 0.5
+        // Face the longest open view.
+        let mut best = 0
+        for d in 0..8 {
+            let a = d as f64 * 0.785398
+            let mut run = 0
+            while run < 20 && !self.solid_at(self.px + a.cos() * run as f64, self.py + a.sin() * run as f64) { run += 1 }
+            if run > best { best = run; self.pa = a }
+        }
+        // Three embers, spread across the far half of the level.
+        let mut placed = 0
+        let mut guard = 0
+        while placed < NEED_EMBERS && guard < 200 {
+            guard += 1
+            let c = self.pick_cell(far * 35 / 100, far * 95 / 100, 4)
+            if c.0 < 0 { continue }
+            let mut ok = true
+            for e in &self.ents {
+                if (e.x - c.0 as f64).abs() + (e.y - c.1 as f64).abs() < 10.0 { ok = false }
+            }
+            if !ok && guard < 150 { continue }
+            self.add_ent(E_EMBER, c.0 as f64 + 0.5, c.1 as f64 + 0.5)
+            placed += 1
+        }
+        if placed < NEED_EMBERS { return false }
+        for _ in 0..4 + self.depth / 3 {
+            let c = self.pick_cell(4, 1000, 0)
+            if c.0 >= 0 { self.add_ent(E_OIL, c.0 as f64 + 0.5, c.1 as f64 + 0.5) }
+        }
+        for _ in 0..3 + self.depth / 2 {
+            let c = self.pick_cell(3, 1000, 6)
+            if c.0 >= 0 { self.add_ent(E_BRAZIER, c.0 as f64 + 0.5, c.1 as f64 + 0.5) }
+        }
+        if self.depth >= 3 {
+            for _ in 0..self.depth - 1 {
+                let c = self.pick_cell(14, 1000, 3)
+                if c.0 >= 0 { self.add_ent(E_HOUND, c.0 as f64 + 0.5, c.1 as f64 + 0.5) }
+            }
+        }
+        // Light sources in the rock.
+        for y in 0..self.mh {
+            for x in 0..self.mw {
+                if self.cell(x, y) != C_CRYSTAL { continue }
+                for d in 0..4 {
+                    let nx = x + dx4(d)
+                    let ny = y + dy4(d)
+                    if self.solid(nx, ny) { continue }
+                    let lx = nx as f64 + 0.5 - dx4(d) as f64 * 0.4
+                    let ly = ny as f64 + 0.5 - dy4(d) as f64 * 0.4
+                    self.crystals.push(Light { x: lx, y: ly, r: 0.12, g: 0.34, b: 0.5, rad: 3.2 })
+                }
+            }
+        }
+        true
+    }
+
+    // The wall cell next to floor (x, y) that could hold the gate, or (-1, -1).
+    fn gate_spot(&self, x: i64, y: i64) -> (i64, i64) {
+        if self.solid(x, y) { return (-1, -1) }
+        for d in 0..4 {
+            let nx = x + dx4(d)
+            let ny = y + dy4(d)
+            if nx > 0 && ny > 0 && nx < self.mw - 1 && ny < self.mh - 1 && self.solid(nx, ny) { return (nx, ny) }
+        }
+        (-1, -1)
+    }
+
+    // The floor cell in front of the gate.
+    fn gate_front(&self) -> (f64, f64) {
+        for d in 0..4 {
+            let nx = self.gate_x + dx4(d)
+            let ny = self.gate_y + dy4(d)
+            if !self.solid(nx, ny) {
+                return (self.gate_x as f64 + 0.5 + dx4(d) as f64 * 0.6, self.gate_y as f64 + 0.5 + dy4(d) as f64 * 0.6)
+            }
+        }
+        (self.gate_x as f64 + 0.5, self.gate_y as f64 + 0.5)
+    }
+
+    // --- light --------------------------------------------------------------
+
+    fn static_lights(&self) -> Vec[Light] {
+        let mut ls = self.crystals.clone()
+        for e in &self.ents {
+            if !e.alive { continue }
+            if e.kind == E_EMBER { ls.push(Light { x: e.x, y: e.y, r: 1.25, g: 0.6, b: 0.18, rad: 5.0 }) }
+            if e.kind == E_BRAZIER && e.state == 1 { ls.push(Light { x: e.x, y: e.y, r: 1.2, g: 0.7, b: 0.32, rad: 6.0 }) }
+        }
+        let f = self.gate_front()
+        if self.gate_open {
+            ls.push(Light { x: f.0, y: f.1, r: 0.35, g: 0.6, b: 1.4, rad: 6.0 })
+        } else {
+            ls.push(Light { x: f.0, y: f.1, r: 0.45, g: 0.08, b: 0.04, rad: 2.5 })
+        }
+        ls
+    }
+
+    // Can light travel from (x0, y0) to the centre of cell (tx, ty)?
+    fn clear_line(&self, x0: f64, y0: f64, tx: i64, ty: i64) -> bool {
+        let x1 = tx as f64 + 0.5
+        let y1 = ty as f64 + 0.5
+        let dx = x1 - x0
+        let dy = y1 - y0
+        let len = (dx * dx + dy * dy).sqrt()
+        let steps = (len * 4.0) as i64 + 1
+        let lcx = x0.floor() as i64
+        let lcy = y0.floor() as i64
+        for i in 1..steps {
+            let f = i as f64 / steps as f64
+            let cx = (x0 + dx * f).floor() as i64
+            let cy = (y0 + dy * f).floor() as i64
+            if (cx == tx && cy == ty) || (cx == lcx && cy == lcy) { continue }
+            if self.solid(cx, cy) { return false }
+        }
+        true
+    }
+
+    // Work out the light that fixed sources cast on every cell, with shadows.
+    fn bake(&mut self) {
+        let ls = self.static_lights()
+        let n = self.mw * self.mh
+        for i in 0..n {
+            self.lm_r[i] = 0.0
+            self.lm_g[i] = 0.0
+            self.lm_b[i] = 0.0
+        }
+        for l in &ls {
+            let r = l.rad.ceil() as i64
+            let lx = l.x.floor() as i64
+            let ly = l.y.floor() as i64
+            for y in ly - r..ly + r + 1 {
+                for x in lx - r..lx + r + 1 {
+                    if x < 0 || y < 0 || x >= self.mw || y >= self.mh { continue }
+                    let dx = x as f64 + 0.5 - l.x
+                    let dy = y as f64 + 0.5 - l.y
+                    let d = (dx * dx + dy * dy).sqrt()
+                    if d >= l.rad { continue }
+                    if !self.clear_line(l.x, l.y, x, y) { continue }
+                    let a = (1.0 - d / l.rad) * (1.0 - d / l.rad)
+                    let i = y * self.mw + x
+                    self.lm_r[i] += l.r * a
+                    self.lm_g[i] += l.g * a
+                    self.lm_b[i] += l.b * a
+                }
+            }
+        }
+    }
+
+    fn lm_at(&self, x: i64, y: i64) -> (f64, f64, f64) {
+        let cx = clampf(x as f64, 0.0, (self.mw - 1) as f64) as i64
+        let cy = clampf(y as f64, 0.0, (self.mh - 1) as f64) as i64
+        let i = cy * self.mw + cx
+        (self.lm_r[i], self.lm_g[i], self.lm_b[i])
+    }
+
+    // Fixed light at a point, blended between cell centres.
+    fn static_light(&self, x: f64, y: f64) -> (f64, f64, f64) {
+        let gx = x - 0.5
+        let gy = y - 0.5
+        let ix = gx.floor() as i64
+        let iy = gy.floor() as i64
+        let fx = gx - ix as f64
+        let fy = gy - iy as f64
+        let a = self.lm_at(ix, iy)
+        let b = self.lm_at(ix + 1, iy)
+        let c = self.lm_at(ix, iy + 1)
+        let d = self.lm_at(ix + 1, iy + 1)
+        let w0 = (1.0 - fx) * (1.0 - fy)
+        let w1 = fx * (1.0 - fy)
+        let w2 = (1.0 - fx) * fy
+        let w3 = fx * fy
+        (a.0 * w0 + b.0 * w1 + c.0 * w2 + d.0 * w3, a.1 * w0 + b.1 * w1 + c.1 * w2 + d.1 * w3, a.2 * w0 + b.2 * w1 + c.2 * w2 + d.2 * w3)
+    }
+
+    // All light at a point: fixed sources, the lantern and any flare.
+    fn light_at(&self, x: f64, y: f64) -> (f64, f64, f64) {
+        let s = self.static_light(x, y)
+        let mut r = 0.018 + s.0 * self.pulse
+        let mut g = 0.016 + s.1 * self.pulse
+        let mut b = 0.022 + s.2 * self.pulse
+        let dx = x - self.px
+        let dy = y - self.py
+        let d2 = dx * dx + dy * dy
+        let rad = self.lantern_r
+        if d2 < rad * rad {
+            let f = 1.0 - d2.sqrt() / rad
+            let a = f * f.sqrt() * self.lantern_i
+            r += a * 1.05
+            g += a * 0.78
+            b += a * 0.46
+        }
+        if self.flare > 0.0 {
+            let fr = 11.0 * clampf(self.flare * 2.0, 0.0, 1.0)
+            let ex = x - self.flare_x
+            let ey = y - self.flare_y
+            let e2 = ex * ex + ey * ey
+            if e2 < fr * fr {
+                let f = 1.0 - e2.sqrt() / fr
+                let a = f * clampf(self.flare, 0.0, 1.0) * 2.2
+                r += a
+                g += a * 0.85
+                b += a * 0.95
+            }
+        }
+        (r, g, b)
+    }
+
+    fn brightness(&self, x: f64, y: f64) -> f64 {
+        let l = self.light_at(x, y)
+        (l.0 + l.1 + l.2) / 3.0
+    }
+
+    // --- screen -------------------------------------------------------------
+
+    fn resize(&mut self) {
+        let cols = term_cols().max(40)
+        let rows = term_rows().max(12)
+        if cols == self.cols && rows == self.rows { return }
+        self.cols = cols
+        self.rows = rows
+        self.sw = cols
+        self.sh = (rows - 2) * 2
+        self.vsc = (self.sw as f64 / 2.0) / PLANE
+        // Keep the view from being stretched taller than it is wide.
+        let fit = self.sh as f64 * 1.25
+        if self.vsc > fit { self.vsc = fit }
+        self.fb = [0; self.sw * self.sh]
+        self.zbuf = [0.0; self.sw]
+        self.ov_ch = ['\0'; cols * rows]
+        self.ov_fg = [0; cols * rows]
+        self.prev_ch = ['\0'; cols * rows]
+        self.prev_fg = [-1; cols * rows]
+        self.prev_bg = [-1; cols * rows]
+        print("\x1b[0m\x1b[2J", end: "")
+    }
+
+    fn shade_px(&self, c: i64, l: (f64, f64, f64)) -> i64 {
+        if c & EMISSIVE != 0 {
+            return rgb(cr(c) * (0.75 + l.0 * 0.4), cg(c) * (0.75 + l.1 * 0.4), cb(c) * (0.75 + l.2 * 0.4))
+        }
+        rgb(cr(c) * l.0, cg(c) * l.1, cb(c) * l.2)
+    }
+
+    fn render_world(&mut self) {
+        let sw = self.sw
+        let sh = self.sh
+        let vsc = self.vsc
+        let hor = sh as f64 / 2.0 + self.bob.sin() * 0.9 * (self.vf.abs() + self.vs.abs()).min(1.0)
+        let dx = self.pa.cos()
+        let dy = self.pa.sin()
+        let plx = -dy * PLANE
+        let ply = dx * PLANE
+        let r0x = dx - plx
+        let r0y = dy - ply
+        let r1x = dx + plx
+        let r1y = dy + ply
+        // Floor and ceiling.
+        for y in 0..sh {
+            let p = y as f64 + 0.5 - hor
+            let ceiling = p < 0.0
+            let rd = 0.5 * vsc / p.abs()
+            if rd > MAX_VIEW {
+                for x in 0..sw { self.fb[y * sw + x] = 0 }
+                continue
+            }
+            let stx = rd * (r1x - r0x) / sw as f64
+            let sty = rd * (r1y - r0y) / sw as f64
+            let mut fx = self.px + rd * r0x + stx * 0.5
+            let mut fy = self.py + rd * r0y + sty * 0.5
+            let tx = if ceiling { TX_CEIL } else { TX_FLOOR }
+            let tex_base = if !ceiling && self.depth >= 6 { TX_ROOT * TS * TS } else { tx * TS * TS }
+            for x in 0..sw {
+                let u = ((fx - fx.floor()) * TS as f64) as i64 & (TS - 1)
+                let v = ((fy - fy.floor()) * TS as f64) as i64 & (TS - 1)
+                let c = self.tex[tex_base + v * TS + u]
+                let l = self.light_at(fx, fy)
+                let k = if ceiling { 0.75 } else { 1.0 }
+                self.fb[y * sw + x] = rgb(cr(c) * l.0 * k, cg(c) * l.1 * k, cb(c) * l.2 * k)
+                fx += stx
+                fy += sty
+            }
+        }
+        // Walls, one ray per column.
+        for x in 0..sw {
+            let cam = 2.0 * (x as f64 + 0.5) / sw as f64 - 1.0
+            let rx = dx + plx * cam
+            let ry = dy + ply * cam
+            let mut mx = self.px.floor() as i64
+            let mut my = self.py.floor() as i64
+            let ddx = if rx == 0.0 { 1e30 } else { (1.0 / rx).abs() }
+            let ddy = if ry == 0.0 { 1e30 } else { (1.0 / ry).abs() }
+            let stepx = if rx < 0.0 { -1 } else { 1 }
+            let stepy = if ry < 0.0 { -1 } else { 1 }
+            let mut sdx = if rx < 0.0 { (self.px - mx as f64) * ddx } else { (mx as f64 + 1.0 - self.px) * ddx }
+            let mut sdy = if ry < 0.0 { (self.py - my as f64) * ddy } else { (my as f64 + 1.0 - self.py) * ddy }
+            let mut side = 0
+            let mut hit = C_FLOOR
+            let mut steps = 0
+            while steps < 64 {
+                if sdx < sdy { sdx += ddx; mx += stepx; side = 0 } else { sdy += ddy; my += stepy; side = 1 }
+                hit = self.cell(mx, my)
+                if mx >= 0 && my >= 0 && mx < self.mw && my < self.mh {
+                    self.seen[my * self.mw + mx] = true
+                }
+                if hit != C_FLOOR { break }
+                steps += 1
+            }
+            let perp = if side == 0 { sdx - ddx } else { sdy - ddy }
+            self.zbuf[x] = perp
+            if hit == C_FLOOR || perp > MAX_VIEW { continue }
+            let perp = perp.max(0.02)
+            let lh = vsc / perp
+            let top = hor - lh / 2.0
+            let hx = self.px + rx * perp
+            let hy = self.py + ry * perp
+            let mut wx = if side == 0 { hy } else { hx }
+            wx -= wx.floor()
+            if (side == 0 && rx > 0.0) || (side == 1 && ry < 0.0) { wx = 1.0 - wx }
+            let u = ((wx * TS as f64) as i64).min(TS - 1)
+            // Light just in front of the wall face.
+            let nx = if side == 0 { hx - stepx as f64 * 0.02 } else { hx }
+            let ny = if side == 1 { hy - stepy as f64 * 0.02 } else { hy }
+            let l = self.light_at(nx, ny)
+            let side_k = if side == 1 { 0.82 } else { 1.0 }
+            let t = hit - 1
+            let y0 = (top.floor() as i64).max(0)
+            let y1 = ((top + lh).ceil() as i64).min(sh)
+            for y in y0..y1 {
+                let v = (y as f64 + 0.5 - top) / lh
+                if v < 0.0 || v >= 1.0 { continue }
+                let tv = ((v * TS as f64) as i64).min(TS - 1)
+                let mut c = self.tex[(t * TS + tv) * TS + u]
+                if hit == C_GATE { c = self.gate_texel(wx, v, c) }
+                // The lantern is held at eye height, so walls are brightest there.
+                let vk = side_k * (1.0 - 0.35 * (v - 0.5).abs() * 2.0)
+                self.fb[y * sw + x] = self.shade_px(c, (l.0 * vk, l.1 * vk, l.2 * vk))
+            }
+        }
+    }
+
+    // The gate shows one lit socket per ember carried, and opens into a portal.
+    fn gate_texel(&self, u: f64, v: f64, base: i64) -> i64 {
+        if self.gate_open {
+            let cx = u - 0.5
+            let cy = v - 0.55
+            let r = (cx * cx + cy * cy * 0.6).sqrt()
+            if r < 0.42 {
+                let a = cy.atan2(cx)
+                let swirl = (a * 3.0 + r * 18.0 - self.t * 4.0).sin() * 0.5 + 0.5
+                let k = (1.0 - r / 0.42) * 0.6 + swirl * 0.4
+                return rgb(60.0 + 120.0 * k, 110.0 + 120.0 * k, 255.0 * (0.5 + 0.5 * k)) | EMISSIVE
+            }
+            return base
+        }
+        for i in 0..NEED_EMBERS {
+            let sx = 0.25 + 0.25 * i as f64
+            let ddx = u - sx
+            let ddy = v - 0.45
+            let d = (ddx * ddx + ddy * ddy).sqrt()
+            if d < 0.075 {
+                if i < self.embers {
+                    let k = 1.0 - d / 0.075 * 0.5
+                    return rgb(255.0 * k, 150.0 * k, 50.0 * k) | EMISSIVE
+                }
+                return rgb(14.0, 10.0, 9.0)
+            }
+            if d < 0.095 { return rgb(120.0, 100.0, 80.0) }
+        }
+        base
+    }
+
+    // --- sprites ------------------------------------------------------------
+
+    fn render_sprites(&mut self) {
+        let dx = self.pa.cos()
+        let dy = self.pa.sin()
+        let plx = -dy * PLANE
+        let ply = dx * PLANE
+        let inv = 1.0 / (plx * dy - dx * ply)
+        let mut order: Vec[i64] = Vec::new()
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive { continue }
+            let ex = e.x - self.px
+            let ey = e.y - self.py
+            let d = ex * ex + ey * ey
+            if d > MAX_VIEW * MAX_VIEW { continue }
+            order.push(((d * 1000.0) as i64) * 4096 + i as i64)
+        }
+        order.sort()
+        let hor = self.sh as f64 / 2.0 + self.bob.sin() * 0.9 * (self.vf.abs() + self.vs.abs()).min(1.0)
+        let mut k = order.len() as i64 - 1
+        while k >= 0 {
+            let i = order[k] % 4096
+            k -= 1
+            let e = self.ents[i]
+            let sx = e.x - self.px
+            let sy = e.y - self.py
+            let tx = inv * (dy * sx - dx * sy)
+            let ty = inv * (-ply * sx + plx * sy)
+            if ty < 0.12 { continue }
+            let scr = (self.sw as f64 / 2.0) * (1.0 + tx / ty)
+            let sc = self.vsc / ty
+            let bobz = (self.t * 2.0 + e.phase).sin()
+            let (w, h, z) = if e.kind == E_EMBER { (0.36, 0.36, 0.28 + 0.04 * bobz) }
+                else if e.kind == E_OIL { (0.24, 0.32, 0.0) }
+                else if e.kind == E_BRAZIER { (0.5, 0.85, 0.0) }
+                else if e.kind == E_SHADE { (0.72, 1.0, 0.04 + 0.04 * bobz) }
+                else { (0.9, 0.55, 0.0) }
+            let bottom = hor + (0.5 - z) * sc
+            let top = bottom - h * sc
+            let pw = w * sc
+            let left = scr - pw / 2.0
+            let ph = h * sc
+            if pw < 0.5 { continue }
+            let l = self.light_at(e.x, e.y)
+            let x0 = (left.floor() as i64).max(0)
+            let x1 = ((left + pw).ceil() as i64).min(self.sw)
+            let y0 = (top.floor() as i64).max(0)
+            let y1 = ((top + ph).ceil() as i64).min(self.sh)
+            for x in x0..x1 {
+                if ty >= self.zbuf[x] { continue }
+                let u = (x as f64 + 0.5 - left) / pw
+                for y in y0..y1 {
+                    let v = (y as f64 + 0.5 - top) / ph
+                    self.sprite_px(e, u, v, x, y, pw, l, ty)
+                }
+            }
+        }
+    }
+
+    fn sprite_px(&mut self, e: Ent, u: f64, v: f64, x: i64, y: i64, pw: f64, l: (f64, f64, f64), depth: f64) {
+        if u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0 { return }
+        let i = y * self.sw + x
+        let cur = self.fb[i]
+        let fade = clampf(1.4 - depth / 14.0, 0.25, 1.0)
+        if e.kind == E_EMBER {
+            let ddx = u - 0.5
+            let ddy = v - 0.5
+            let r = (ddx * ddx + ddy * ddy).sqrt() * 2.0
+            if r >= 1.0 { return }
+            let flick = 0.85 + 0.15 * (self.t * 13.0 + e.phase * 3.0).sin()
+            let glow = (1.0 - r) * (1.0 - r) * flick
+            if r < 0.32 {
+                self.fb[i] = mix(rgb(255.0, 170.0, 70.0), rgb(255.0, 245.0, 210.0), 1.0 - r / 0.32)
+            } else {
+                self.fb[i] = rgb(cr(cur) + 255.0 * glow, cg(cur) + 120.0 * glow, cb(cur) + 30.0 * glow)
+            }
+        } else if e.kind == E_OIL {
+            let ddx = (u - 0.5) / 0.46
+            let ddy = (v - 0.66) / 0.34
+            let body = ddx * ddx + ddy * ddy < 1.0
+            let neck = (u - 0.5).abs() < 0.12 && v < 0.36 && v > 0.08
+            let cork = (u - 0.5).abs() < 0.14 && v <= 0.1
+            if !body && !neck && !cork { return }
+            let base = if cork { rgb(110.0, 70.0, 40.0) } else if neck { rgb(150.0, 120.0, 70.0) } else { rgb(215.0, 150.0, 40.0) }
+            let hl = if body && ddx < -0.2 && ddy < -0.1 && ddx > -0.6 { 1.6 } else { 1.0 }
+            let lit = rgb(cr(base) * l.0 * hl, cg(base) * l.1 * hl, cb(base) * l.2 * hl)
+            // A faint gleam, so a flask can just be spotted in the dark.
+            self.fb[i] = rgb(cr(lit) + 22.0 * fade, cg(lit) + 14.0 * fade, cb(lit) + 4.0 * fade)
+        } else if e.kind == E_BRAZIER {
+            let bowl = v >= 0.5 && v < 0.64 && (u - 0.5).abs() < 0.45 - (v - 0.5) * 1.2
+            let stem = v >= 0.64 && (u - 0.5).abs() < 0.08
+            let foot = v >= 0.93 && (u - 0.5).abs() < 0.28
+            if bowl || stem || foot {
+                let k = if bowl { 1.0 } else { 0.8 }
+                self.fb[i] = rgb(120.0 * l.0 * k, 112.0 * l.1 * k, 104.0 * l.2 * k)
+                return
+            }
+            if e.state == 1 && v < 0.52 {
+                // Flame: a teardrop that licks upward, with noise that moves.
+                let hgt = (0.52 - v) / 0.5
+                let width = 0.34 * (1.0 - hgt) * (1.0 - hgt).sqrt() + 0.02
+                let wob = (v * 22.0 - self.t * 9.0 + e.phase).sin() * 0.04 * hgt
+                let ddx = (u - 0.5 - wob).abs()
+                if ddx > width { return }
+                let n = hash((u * 20.0) as i64, ((v + self.t * 1.7) * 14.0) as i64, 3)
+                let core = 1.0 - ddx / width
+                let heat = core * (1.0 - hgt * 0.7) * (0.75 + 0.25 * n)
+                if heat < 0.08 { return }
+                self.fb[i] = rgb(cr(cur) + 255.0 * heat, cg(cur) + 160.0 * heat * heat, cb(cur) + 60.0 * heat * heat * heat)
+            }
+        } else if e.kind == E_SHADE {
+            let mut alpha = if e.state == S_DYING { clampf(e.timer / 0.7, 0.0, 1.0) } else { 1.0 }
+            let ex0 = u - 0.42
+            let ex1 = u - 0.58
+            let ey = v - 0.2
+            let eye_r = (0.045f64).max(0.7 / pw)
+            let blink = (self.t * 0.7 + e.phase).sin() > 0.97
+            if !blink && e.state != S_DYING && ((ex0 * ex0 + ey * ey * 0.5).sqrt() < eye_r || (ex1 * ex1 + ey * ey * 0.5).sqrt() < eye_r) {
+                let k = if e.state == S_LUNGE { 1.0 } else { 0.85 }
+                self.fb[i] = rgb(255.0 * k, 40.0 * k, 24.0 * k)
+                return
+            }
+            // A hooded head on a body that frays into smoke.
+            let hx = u - 0.5
+            let hy = v - 0.22
+            let head = hx * hx + hy * hy < 0.034
+            let wave = (v * 18.0 + self.t * 5.0 + e.phase).sin() * 0.05
+            let half = 0.16 + 0.28 * (v - 0.25).max(0.0) + wave
+            let body = v > 0.25 && hx.abs() < half
+            if !head && !body { return }
+            if v > 0.7 {
+                let n = hash((u * 16.0) as i64, ((v - self.t * 0.8) * 12.0) as i64, e.phase as i64)
+                alpha *= clampf((1.0 - v) * 3.3 + n * 0.5 - 0.25, 0.0, 1.0)
+            }
+            let edge = clampf((half - hx.abs()) * 12.0, 0.0, 1.0)
+            if body { alpha *= edge }
+            let k = 1.0 - 0.92 * alpha
+            self.fb[i] = rgb(cr(cur) * k + 6.0 * alpha, cg(cur) * k + 2.0 * alpha, cb(cur) * k + 10.0 * alpha)
+        } else {
+            // A hound, facing you: a long head over a hunched body.
+            let ex0 = u - 0.42
+            let ex1 = u - 0.58
+            let ey = v - 0.3
+            let eye_r = (0.04f64).max(0.6 / pw)
+            if e.state != H_FLEE && ((ex0 * ex0 + ey * ey).sqrt() < eye_r || (ex1 * ex1 + ey * ey).sqrt() < eye_r) {
+                self.fb[i] = rgb(255.0, 210.0, 60.0)
+                return
+            }
+            let hx = (u - 0.5) / 0.2
+            let hy = (v - 0.36) / 0.24
+            let head = hx * hx + hy * hy < 1.0
+            let ear = v < 0.22 && v > 0.04 && ((u - 0.36).abs() < (v - 0.04) * 0.35 || (u - 0.64).abs() < (v - 0.04) * 0.35)
+            let bx = (u - 0.5) / 0.44
+            let by = (v - 0.58) / 0.22
+            let body = bx * bx + by * by < 1.0
+            let leg = v > 0.62 && (((u - 0.24).abs() < 0.06) || ((u - 0.76).abs() < 0.06) || ((u - 0.4).abs() < 0.05) || ((u - 0.6).abs() < 0.05))
+            let snout = (u - 0.5).abs() < 0.07 && v > 0.36 && v < 0.55
+            if !head && !body && !leg && !ear && !snout { return }
+            if snout && v > 0.47 && v < 0.51 && ((u * 40.0) as i64) % 2 == 0 {
+                self.fb[i] = rgb(200.0 * l.0 + 30.0, 190.0 * l.1 + 30.0, 170.0 * l.2 + 30.0)
+                return
+            }
+            let base = if snout { rgb(30.0, 12.0, 12.0) } else { rgb(70.0, 40.0, 34.0) }
+            let fur = 0.75 + 0.25 * hash((u * 18.0) as i64, (v * 18.0) as i64, 8)
+            self.fb[i] = rgb(cr(base) * l.0 * fur, cg(base) * l.1 * fur, cb(base) * l.2 * fur)
+        }
+    }
+
+    // --- overlays -----------------------------------------------------------
+
+    fn clear_overlay(&mut self) {
+        for i in 0..self.cols * self.rows { self.ov_ch[i] = '\0' }
+    }
+
+    fn text(&mut self, col: i64, row: i64, s: str, fg: i64) {
+        let mut c = col
+        for ch in s.chars() {
+            if c >= 0 && c < self.cols && row >= 0 && row < self.rows {
+                self.ov_ch[row * self.cols + c] = ch
+                self.ov_fg[row * self.cols + c] = fg
+            }
+            c += 1
+        }
+    }
+
+    fn text_center(&mut self, row: i64, s: str, fg: i64) {
+        let n = s.chars().len() as i64
+        self.text((self.cols - n) / 2, row, s, fg)
+    }
+
+    fn post(&mut self) {
+        let sw = self.sw
+        let sh = self.sh
+        let cxm = sw as f64 / 2.0
+        let cym = sh as f64 / 2.0
+        let red = clampf(self.hurt, 0.0, 1.0)
+        let dark = if self.oil <= 0.0 { 0.5 } else { 0.26 }
+        for y in 0..sh {
+            for x in 0..sw {
+                let ddx = (x as f64 - cxm) / cxm
+                let ddy = (y as f64 - cym) / cym
+                let r2 = ddx * ddx * 0.6 + ddy * ddy * 0.5
+                let k = clampf(1.0 - dark * r2, 0.0, 1.0)
+                let c = self.fb[y * sw + x]
+                let mut rr = cr(c) * k
+                let mut gg = cg(c) * k
+                let mut bb = cb(c) * k
+                if self.dread > 0.0 {
+                    let e = self.dread * r2 * 0.35
+                    rr = rr * (1.0 - e) + 30.0 * e
+                    gg *= 1.0 - e * 1.2
+                    bb = bb * (1.0 - e) + 60.0 * e
+                }
+                if red > 0.0 {
+                    let e = red * (0.3 + r2 * 0.7)
+                    rr = rr * (1.0 - e) + 150.0 * e
+                    gg *= 1.0 - e
+                    bb *= 1.0 - e
+                }
+                self.fb[y * sw + x] = rgb(rr, gg, bb)
+            }
+        }
+    }
+
+    // The map in the top right corner: only what you have seen.
+    fn draw_map(&mut self) {
+        let cell = if self.sh >= 90 { 2 } else { 1 }
+        let ox = self.sw - self.mw * cell - 2
+        let oy = 1
+        if ox < 0 { return }
+        for y in 0..self.mh {
+            for x in 0..self.mw {
+                let i = y * self.mw + x
+                let c = self.map[i]
+                let mut col = if !self.seen[i] { -1 } else if c == C_FLOOR { 0x2a2622 } else if c == C_GATE { if self.gate_open { 0x5080ff } else { 0x902018 } } else if c == C_CRYSTAL { 0x3090b0 } else { 0x6a625a }
+                if c == C_FLOOR && self.seen[i] {
+                    let l = self.lm_at(x, y)
+                    let b = clampf((l.0 + l.1 + l.2) * 40.0, 0.0, 60.0)
+                    col = rgb(42.0 + b, 38.0 + b * 0.7, 34.0 + b * 0.3)
+                }
+                for yy in 0..cell {
+                    for xx in 0..cell {
+                        let fi = (oy + y * cell + yy) * self.sw + ox + x * cell + xx
+                        if col >= 0 { self.fb[fi] = col } else { self.fb[fi] = scale(self.fb[fi], 0.3) }
+                    }
+                }
+            }
+        }
+        for k in 0..self.ents.len() {
+            let e = self.ents[k]
+            if !e.alive { continue }
+            let ix = e.x.floor() as i64
+            let iy = e.y.floor() as i64
+            if !self.seen[iy * self.mw + ix] { continue }
+            let col = if e.kind == E_EMBER { 0xffa030 } else if e.kind == E_OIL { 0xd0b040 } else if e.kind == E_BRAZIER { if e.state == 1 { 0xff7020 } else { 0x908070 } } else { -1 }
+            if col < 0 { continue }
+            self.fb[(oy + iy * cell) * self.sw + ox + ix * cell] = col
+        }
+        let pi = (oy + (self.py.floor() as i64) * cell) * self.sw + ox + (self.px.floor() as i64) * cell
+        self.fb[pi] = if (self.t * 4.0) as i64 % 2 == 0 { 0xffffff } else { 0xff4040 }
+    }
+
+    fn draw_hud(&mut self) {
+        let r = self.rows - 2
+        let oil_c = if self.oil < 25.0 { if (self.t * 3.0) as i64 % 2 == 0 { 0xff5030 } else { 0x803020 } } else { 0xffb040 }
+        let mut s = String::new()
+        s.push_str(" OIL ")
+        self.text(0, r, s.as_str(), 0xc0a080)
+        let ob = bar(self.oil, OIL_MAX, 12)
+        self.text(5, r, ob.as_str(), oil_c)
+        self.text(18, r, " LIFE ", 0xc0a080)
+        let hb = bar(self.hp, 100.0, 10)
+        self.text(24, r, hb.as_str(), if self.hurt > 0.2 { 0xff3030 } else { 0xd04040 })
+        self.text(35, r, " EMBERS ", 0xc0a080)
+        for i in 0..NEED_EMBERS {
+            if i < self.embers { self.text(43 + i * 2, r, "◆", 0xffa030) } else { self.text(43 + i * 2, r, "◇", 0x605040) }
+        }
+        let dl = "  DEPTH {self.depth}/{LAST_DEPTH}"
+        self.text(49, r, dl.as_str(), 0xc0a080)
+        if self.msg_t > 0.0 && self.msg.len() > 0 {
+            let m = self.msg.clone()
+            let fade = clampf(self.msg_t, 0.3, 1.0)
+            self.text(1, r + 1, m.as_str(), scale(0xffe0b0, fade))
+        } else {
+            self.text(1, r + 1, "WASD move  ←→/QE turn  SPACE flare  F light brazier  M map  ? help  ESC pause", 0x6a5e50)
+        }
+        if self.intro > 0.0 {
+            let k = clampf(self.intro, 0.0, 1.0)
+            let title = if self.depth == 1 { "THE FIRST HALLS" } else if self.depth == 2 { "THE OLD CELLARS" } else if self.depth == 3 { "THE WET CAVES" } else if self.depth == 4 { "THE HOUND WARRENS" } else if self.depth == 5 { "THE SUNKEN CRYPT" } else { "THE ROOTS OF THE WORLD" }
+            let row = self.rows / 3
+            let dt = "D E P T H   {self.depth}"
+            self.text_center(row, dt.as_str(), scale(0xffc070, k))
+            self.text_center(row + 1, title, scale(0xc08050, k))
+            if self.depth == 1 && self.intro > 0.0 {
+                self.text_center(row + 3, "Find the three embers. Bring them to the gate.", scale(0xa09080, k))
+                self.text_center(row + 4, "Keep your lantern lit. The dark is not empty.", scale(0xa09080, k))
+            }
+        }
+    }
+
+    // Turn the framebuffer and overlay into terminal output, sending only the
+    // cells that changed since the last frame.
+    fn present(&mut self) {
+        self.out.clear()
+        let mut cur_fg = -1
+        let mut cur_bg = -1
+        let mut cursor = -1
+        let view_rows = self.sh / 2
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let ci = row * self.cols + col
+                let mut ch = self.ov_ch[ci]
+                let mut fg = 0
+                let mut bg = 0
+                if row < view_rows {
+                    let top = self.fb[(row * 2) * self.sw + col] & 0xfcfcfc
+                    let bot = self.fb[(row * 2 + 1) * self.sw + col] & 0xfcfcfc
+                    if ch != '\0' {
+                        fg = self.ov_fg[ci]
+                        bg = scale(mix(top, bot, 0.5), 0.3) & 0xfcfcfc
+                    } else if top == bot {
+                        ch = ' '
+                        fg = -1
+                        bg = top
+                    } else {
+                        ch = '▀'
+                        fg = top
+                        bg = bot
+                    }
+                } else {
+                    bg = 0x0c0a08
+                    if ch == '\0' { ch = ' '; fg = -1 } else { fg = self.ov_fg[ci] }
+                }
+                if self.prev_ch[ci] == ch && self.prev_bg[ci] == bg && (fg < 0 || self.prev_fg[ci] == fg) { continue }
+                self.prev_ch[ci] = ch
+                self.prev_fg[ci] = fg
+                self.prev_bg[ci] = bg
+                if cursor != ci {
+                    self.out.push_str("\x1b[")
+                    push_num(&mut self.out, row + 1)
+                    self.out.push_byte(59)
+                    push_num(&mut self.out, col + 1)
+                    self.out.push_byte(72)
+                }
+                if fg >= 0 && fg != cur_fg { push_color(&mut self.out, true, fg); cur_fg = fg }
+                if bg != cur_bg { push_color(&mut self.out, false, bg); cur_bg = bg }
+                self.out.push(ch)
+                cursor = ci + 1
+                // The terminal wraps after the last column; do not rely on it.
+                if col == self.cols - 1 { cursor = -1 }
+            }
+        }
+        print(self.out.as_str(), end: "")
+        flush()
+    }
+
+    // --- the game -----------------------------------------------------------
+
+    fn say(&mut self, m: str) {
+        self.msg = m.to_string()
+        self.msg_t = 3.5
+    }
+
+    fn new_run(&mut self) {
+        self.rng = self.seed * 2654435761 + 88172645463325252
+        self.depth = 1
+        self.oil = OIL_MAX
+        self.hp = 100.0
+        self.flares_used = 0
+        self.shades_burned = 0
+        self.oil_found = 0
+        self.t = 0.0
+        self.gen_level()
+        self.mode = M_PLAY
+        self.msg_t = 0.0
+    }
+
+    fn try_move(&mut self, mx: f64, my: f64) {
+        let r = 0.22
+        let nx = self.px + mx
+        let ny = self.py + my
+        // Walking into an open gate takes you down.
+        if self.gate_open {
+            let gx = (nx + mx.signum() * r).floor() as i64
+            let gy = (ny + my.signum() * r).floor() as i64
+            if (gx == self.gate_x && (self.py.floor() as i64) == self.gate_y) || (gy == self.gate_y && (self.px.floor() as i64) == self.gate_x) {
+                self.descend()
+                return
+            }
+        }
+        let ox = if mx > 0.0 { r } else { -r }
+        if !self.solid_at(nx + ox, self.py - r) && !self.solid_at(nx + ox, self.py + r) { self.px = nx }
+        let oy = if my > 0.0 { r } else { -r }
+        if !self.solid_at(self.px - r, ny + oy) && !self.solid_at(self.px + r, ny + oy) { self.py = ny }
+    }
+
+    fn descend(&mut self) {
+        if self.depth >= LAST_DEPTH {
+            self.mode = M_WON
+            self.say("You climb the last stair into open air.")
+            self.anim_t = 0.0
+            self.hurt = 0.0
+            self.dread = 0.0
+            return
+        }
+        self.depth += 1
+        self.hp = (self.hp + 25.0).min(100.0)
+        self.oil = (self.oil + 15.0).min(OIL_MAX)
+        self.gen_level()
+        self.say("You step through the gate, and the stairs beyond carry you deeper.")
+    }
+
+    fn handle_key(&mut self, k: i64) {
+        self.last_key_t = self.t
+        // A fresh press moves about one step; key repeats (which start after a
+        // pause) then keep you going for as long as the key is held.
+        let fresh = 0.45
+        let rep = 0.1
+        let hold = if self.precise { 0.05 } else { 0.0 }
+        if k == 'w' as i64 || k == 'W' as i64 || k == K_UP || k == 'k' as i64 {
+            self.k_fwd = if hold > 0.0 { hold } else if self.k_fwd > 0.0 { rep } else { fresh }
+        } else if k == 's' as i64 || k == 'S' as i64 || k == K_DOWN {
+            self.k_back = if hold > 0.0 { hold } else if self.k_back > 0.0 { rep } else { fresh }
+        } else if k == 'a' as i64 || k == 'A' as i64 {
+            self.k_left = if hold > 0.0 { hold } else if self.k_left > 0.0 { rep } else { fresh }
+        } else if k == 'd' as i64 || k == 'D' as i64 {
+            self.k_right = if hold > 0.0 { hold } else if self.k_right > 0.0 { rep } else { fresh }
+        } else if k == K_LEFT || k == 'q' as i64 || k == 'Q' as i64 || k == 'j' as i64 || k == ',' as i64 {
+            self.k_tl = if hold > 0.0 { hold } else if self.k_tl > 0.0 { rep } else { 0.3 }
+        } else if k == K_RIGHT || k == 'e' as i64 || k == 'E' as i64 || k == 'l' as i64 || k == '.' as i64 {
+            self.k_tr = if hold > 0.0 { hold } else if self.k_tr > 0.0 { rep } else { 0.3 }
+        } else if k == ' ' as i64 {
+            self.fire_flare()
+        } else if k == 'f' as i64 || k == 'F' as i64 {
+            self.interact()
+        } else if k == 'm' as i64 || k == 'M' as i64 || k == '\t' as i64 {
+            self.show_map = !self.show_map
+        } else if k == '?' as i64 || k == 'h' as i64 {
+            self.mode = M_HELP
+        } else if k == K_ESC || k == 'p' as i64 {
+            self.mode = M_PAUSE
+        } else if self.dev && k == '1' as i64 {
+            // Developer keys (with --dev): stand near the next thing of a kind.
+            self.dev_goto(E_EMBER)
+        } else if self.dev && k == '2' as i64 {
+            let mut d = 0.5
+            while d < 4.5 && !self.solid_at(self.px + self.pa.cos() * d, self.py + self.pa.sin() * d) { d += 0.25 }
+            self.add_ent(E_SHADE, self.px + self.pa.cos() * (d - 0.5), self.py + self.pa.sin() * (d - 0.5))
+            let last = self.ents.len() - 1
+            self.ents[last].cool = 3.0
+        } else if self.dev && k == '3' as i64 {
+            self.dev_goto(E_HOUND)
+        } else if self.dev && k == '4' as i64 {
+            self.dev_goto(E_BRAZIER)
+        } else if self.dev && k == '5' as i64 {
+            self.embers = NEED_EMBERS
+            self.gate_open = true
+            self.bake()
+            let f = self.gate_front()
+            self.px = f.0
+            self.py = f.1
+            self.pa = ((self.gate_y as f64 + 0.5) - f.1).atan2((self.gate_x as f64 + 0.5) - f.0)
+            let back = 2.0
+            if !self.solid_at(self.px - self.pa.cos() * back, self.py - self.pa.sin() * back) {
+                self.px -= self.pa.cos() * back
+                self.py -= self.pa.sin() * back
+            }
+        } else if self.dev && k == '6' as i64 {
+            self.oil = 3.0
+        } else if self.dev && k == '9' as i64 {
+            self.descend()
+        }
+    }
+
+    // Stand two steps from the nearest living thing of `kind`, facing it.
+    fn dev_goto(&mut self, kind: i64) {
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || e.kind != kind { continue }
+            for d in 0..16 {
+                let a = d as f64 * 0.3927
+                let x = e.x + a.cos() * 2.2
+                let y = e.y + a.sin() * 2.2
+                if !self.solid_at(x, y) && self.clear_line(x, y, e.x.floor() as i64, e.y.floor() as i64) {
+                    self.px = x
+                    self.py = y
+                    self.pa = (e.y - y).atan2(e.x - x)
+                    return
+                }
+            }
+        }
+    }
+
+    fn held(&self, a: i64, b: i64) -> bool {
+        if !self.precise || self.t - self.last_key_t > 0.6 { return false }
+        key_down(a) == 1 || (b != 0 && key_down(b) == 1)
+    }
+
+    fn fire_flare(&mut self) {
+        if self.flare > 0.6 { return }
+        if self.oil < FLARE_COST {
+            self.say("Not enough oil for a flare.")
+            return
+        }
+        self.oil -= FLARE_COST
+        self.flare = 1.4
+        self.flare_x = self.px + self.pa.cos() * 0.6
+        self.flare_y = self.py + self.pa.sin() * 0.6
+        self.flares_used += 1
+        // The burst wakes every hound on the level, but stuns the ones near you.
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || e.kind != E_HOUND { continue }
+            let d = ((e.x - self.px) * (e.x - self.px) + (e.y - self.py) * (e.y - self.py)).sqrt()
+            if d < 2.2 {
+                // Close enough to burn: the hound flees, howling, and is gone.
+                self.ents[i].alive = false
+                self.say("The flare engulfs the hound. It flees howling into the dark.")
+            } else if d < 7.0 {
+                self.ents[i].state = H_FLEE
+                self.ents[i].timer = 4.5 - d * 0.3
+            } else if e.state == H_SLEEP {
+                self.ents[i].state = H_HUNT
+            }
+        }
+    }
+
+    fn interact(&mut self) {
+        let mut best = -1
+        let mut bd = 2.4
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || e.kind != E_BRAZIER || e.state == 1 { continue }
+            let d = ((e.x - self.px) * (e.x - self.px) + (e.y - self.py) * (e.y - self.py)).sqrt()
+            if d < bd { bd = d; best = i as i64 }
+        }
+        if best < 0 {
+            self.say("There is nothing here to light. (Stand by an unlit brazier.)")
+            return
+        }
+        if self.oil < BRAZIER_COST + 1.0 {
+            self.say("You need more oil to light the brazier.")
+            return
+        }
+        self.oil -= BRAZIER_COST
+        self.ents[best].state = 1
+        self.bake()
+        self.say("The brazier catches. The shadows draw back from it.")
+    }
+
+    // The autopilot knows where everything is. It walks to oil when low, else to
+    // the nearest ember, else to the gate, and flares when something is on it.
+    fn bot_think(&mut self, dt: f64) {
+        self.bot_t -= dt
+        let pcx = self.px.floor() as i64
+        let pcy = self.py.floor() as i64
+        if self.bot_t <= 0.0 || self.bot_map.len() != self.mw * self.mh {
+            self.bot_t = 0.3
+            let mut goal = -1
+            let mut gx = 0.0
+            let mut gy = 0.0
+            if self.gate_open {
+                let f = self.gate_front()
+                gx = f.0
+                gy = f.1
+                goal = 1
+            }
+            self.bot_look()
+            let mut best = 1e9
+            for pass in 0..2 {
+                if goal >= 0 { break }
+                for e in &self.ents {
+                    if !e.alive || !self.seen[(e.y.floor() as i64) * self.mw + e.x.floor() as i64] { continue }
+                    let want = if pass == 0 { e.kind == E_OIL && self.oil < 45.0 } else { e.kind == E_EMBER }
+                    if !want { continue }
+                    let d = (e.x - self.px).abs() + (e.y - self.py).abs()
+                    if d < best { best = d; gx = e.x; gy = e.y; goal = 1 }
+                }
+            }
+            if goal < 0 {
+                // Nothing known to go for: explore the nearest unseen floor.
+                let pm = self.flood_map(pcx, pcy)
+                let mut bd = 1000000
+                for i in 0..self.mw * self.mh {
+                    if pm[i] > 0 && !self.seen[i] && pm[i] < bd {
+                        bd = pm[i]
+                        gx = (i % self.mw) as f64 + 0.5
+                        gy = (i / self.mw) as f64 + 0.5
+                        goal = 1
+                    }
+                }
+            }
+            if goal < 0 { return }
+            self.bot_goal = (gy.floor() as i64) * self.mw + gx.floor() as i64
+            self.bot_map = self.flood_map(gx.floor() as i64, gy.floor() as i64)
+        }
+        if self.bot_goal < 0 { return }
+        // Step to the neighbouring cell nearer the goal; at the goal, walk onto it
+        // (or, for the gate, into it).
+        let here = self.bot_map[pcy * self.mw + pcx]
+        let mut tx = (self.bot_goal % self.mw) as f64 + 0.5
+        let mut ty = (self.bot_goal / self.mw) as f64 + 0.5
+        if here > 0 {
+            let mut best = here
+            for d in 0..4 {
+                let nx = pcx + dx4(d)
+                let ny = pcy + dy4(d)
+                if self.solid(nx, ny) { continue }
+                let nd = self.bot_map[ny * self.mw + nx]
+                if nd >= 0 && nd < best { best = nd; tx = nx as f64 + 0.5; ty = ny as f64 + 0.5 }
+            }
+        } else if self.gate_open {
+            tx = self.gate_x as f64 + 0.5
+            ty = self.gate_y as f64 + 0.5
+        }
+        let want = (ty - self.py).atan2(tx - self.px)
+        let mut diff = want - self.pa
+        while diff > 3.14159 { diff -= 6.28318 }
+        while diff < -3.14159 { diff += 6.28318 }
+        if diff > 0.08 { self.k_tr = 0.05 } else if diff < -0.08 { self.k_tl = 0.05 }
+        if diff.abs() < 0.6 { self.k_fwd = 0.05 }
+        // Danger: flare when a shade is on you or a hound is about to bite.
+        let mut threat = false
+        for e in &self.ents {
+            if !e.alive { continue }
+            let d = ((e.x - self.px) * (e.x - self.px) + (e.y - self.py) * (e.y - self.py)).sqrt()
+            if (e.kind == E_SHADE && e.state != S_DYING && d < 1.0) || (e.kind == E_HOUND && e.state == H_HUNT && d < 2.1) { threat = true }
+        }
+        // A person needs a moment to react.
+        self.bot_alarm = if threat { self.bot_alarm + dt } else { 0.0 }
+        if self.bot_alarm > 0.35 && self.flare <= 0.0 && self.oil >= FLARE_COST { self.fire_flare() }
+    }
+
+    // What the autopilot can see: floor within the lantern's reach, in line of sight.
+    fn bot_look(&mut self) {
+        let r = 7
+        let cx = self.px.floor() as i64
+        let cy = self.py.floor() as i64
+        for y in cy - r..cy + r + 1 {
+            for x in cx - r..cx + r + 1 {
+                if x < 0 || y < 0 || x >= self.mw || y >= self.mh { continue }
+                if (x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r { continue }
+                if self.clear_line(self.px, self.py, x, y) { self.seen[y * self.mw + x] = true }
+            }
+        }
+    }
+
+    fn update(&mut self, dt: f64) {
+        if self.bot { self.bot_think(dt) }
+        self.t += dt
+        self.level_t += dt
+        self.intro = (self.intro - dt).max(0.0)
+        self.msg_t = (self.msg_t - dt).max(0.0)
+        self.hurt = (self.hurt - dt * 1.5).max(0.0)
+        self.flare = (self.flare - dt).max(0.0)
+        self.safe += dt
+        // Input to motion, eased so that taps and key repeats feel smooth.
+        let f = if self.k_fwd > 0.0 || self.held('w' as i64, K_UP) { 1.0 } else { 0.0 }
+        let b = if self.k_back > 0.0 || self.held('s' as i64, K_DOWN) { 1.0 } else { 0.0 }
+        let sl = if self.k_left > 0.0 || self.held('a' as i64, 0) { 1.0 } else { 0.0 }
+        let sr = if self.k_right > 0.0 || self.held('d' as i64, 0) { 1.0 } else { 0.0 }
+        let tl = if self.k_tl > 0.0 || self.held(K_LEFT, 'q' as i64) { 1.0 } else { 0.0 }
+        let tr = if self.k_tr > 0.0 || self.held(K_RIGHT, 'e' as i64) { 1.0 } else { 0.0 }
+        self.k_fwd = (self.k_fwd - dt).max(0.0)
+        self.k_back = (self.k_back - dt).max(0.0)
+        self.k_left = (self.k_left - dt).max(0.0)
+        self.k_right = (self.k_right - dt).max(0.0)
+        self.k_tl = (self.k_tl - dt).max(0.0)
+        self.k_tr = (self.k_tr - dt).max(0.0)
+        let ease = clampf(dt * 10.0, 0.0, 1.0)
+        self.vf += ((f - b) - self.vf) * ease
+        self.vs += ((sr - sl) - self.vs) * ease
+        self.vt += ((tr - tl) - self.vt) * clampf(dt * 14.0, 0.0, 1.0)
+        self.pa += self.vt * 2.3 * dt
+        let speed = 2.6
+        let dx = self.pa.cos()
+        let dy = self.pa.sin()
+        let mx = (dx * self.vf - dy * self.vs) * speed * dt
+        let my = (dy * self.vf + dx * self.vs) * speed * dt
+        if mx != 0.0 || my != 0.0 {
+            self.try_move(mx, my)
+            if self.mode != M_PLAY { return }
+            self.bob += (mx * mx + my * my).sqrt() * 7.0
+        }
+        // The lantern burns down; the flame flickers more as it gutters.
+        let drain = 0.8 + 0.07 * self.depth as f64
+        self.oil = (self.oil - drain * dt).max(0.0)
+        let frac = self.oil / OIL_MAX
+        let flick = (self.t * 11.0).sin() * 0.5 + (self.t * 17.3).sin() * 0.3 + (self.t * 5.1).sin() * 0.2
+        let gutter = if frac < 0.2 { 0.12 + (0.2 - frac) * 1.2 } else { 0.05 }
+        self.lantern_r = 2.6 + 4.6 * frac.sqrt() + flick * gutter * 3.0
+        self.lantern_i = if self.oil <= 0.0 { 0.55 + 0.1 * flick } else { 1.05 + 0.45 * frac + flick * gutter }
+        self.pulse = 0.93 + 0.05 * (self.t * 2.3).sin() + 0.02 * (self.t * 7.7).sin()
+        if self.oil <= 0.0 && self.level_t > 1.0 && self.msg_t <= 0.0 { self.say("Your lantern is out. Find oil, or light.") }
+        self.pickups()
+        self.update_shades(dt)
+        self.update_hounds(dt)
+        self.spawn_shades(dt)
+        // Life comes back slowly when nothing has hurt you for a while.
+        if self.safe > 5.0 { self.hp = (self.hp + 1.5 * dt).min(100.0) }
+        if self.hp <= 0.0 {
+            self.hp = 0.0
+            self.mode = M_DEAD
+        }
+    }
+
+    fn pickups(&mut self) {
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || (e.kind != E_EMBER && e.kind != E_OIL) { continue }
+            let ddx = e.x - self.px
+            let ddy = e.y - self.py
+            if ddx * ddx + ddy * ddy > 0.36 { continue }
+            self.ents[i].alive = false
+            if e.kind == E_OIL {
+                self.oil = (self.oil + 32.0).min(OIL_MAX)
+                self.oil_found += 1
+                self.say("A flask of lamp oil. You top up the lantern.")
+            } else {
+                self.embers += 1
+                if self.embers >= NEED_EMBERS {
+                    self.gate_open = true
+                    self.say("The third ember! Far away, the gate groans open... and the dark stirs.")
+                    // The dark answers: a wave of shades, at once.
+                    for _ in 0..2 + self.depth / 2 { self.spawn_one(true) }
+                } else {
+                    let left = NEED_EMBERS - self.embers
+                    let m = "You cup the ember in your hands. {left} more to find."
+                    self.say(m.as_str())
+                }
+                self.oil = (self.oil + 10.0).min(OIL_MAX)
+            }
+            self.bake()
+        }
+    }
+
+    fn count_shades(&self) -> i64 {
+        let mut n = 0
+        for e in &self.ents {
+            if e.alive && e.kind == E_SHADE && e.state != S_DYING { n += 1 }
+        }
+        n
+    }
+
+    fn spawn_shades(&mut self, dt: f64) {
+        self.spawn_t -= dt
+        if self.spawn_t > 0.0 { return }
+        // The longer you linger, the more of them come.
+        let linger = (self.level_t / 60.0) as i64
+        let cap = 2 + self.depth + linger
+        self.spawn_t = (13.0 - self.depth as f64 * 1.3 - linger as f64).max(3.5) + self.rf() * 4.0
+        if self.count_shades() < cap { self.spawn_one(false) }
+    }
+
+    // A shade rises out of a dark place, out of sight.
+    fn spawn_one(&mut self, near: bool) {
+        let px = self.px.floor() as i64
+        let py = self.py.floor() as i64
+        for _ in 0..400 {
+            let x = self.rn(self.mw)
+            let y = self.rn(self.mh)
+            let d = (x - px).abs() + (y - py).abs()
+            let lo = if near { 6 } else { 9 }
+            let hi = if near { 12 } else { 22 }
+            if d < lo || d > hi || self.solid(x, y) { continue }
+            let fx = x as f64 + 0.5
+            let fy = y as f64 + 0.5
+            let s = self.static_light(fx, fy)
+            if s.0 + s.1 + s.2 > 0.25 { continue }
+            self.add_ent(E_SHADE, fx, fy)
+            let last = self.ents.len() - 1
+            self.ents[last].hp = 1.0
+            self.ents[last].cool = 2.0 + self.rf() * 4.0
+            return
+        }
+    }
+
+    fn update_shades(&mut self, dt: f64) {
+        let fear = 0.36 + 0.04 * self.depth as f64
+        let mut dread = 0.0
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || e.kind != E_SHADE { continue }
+            if e.state == S_DYING {
+                self.ents[i].timer -= dt
+                if self.ents[i].timer <= 0.0 { self.ents[i].alive = false }
+                continue
+            }
+            let ddx = self.px - e.x
+            let ddy = self.py - e.y
+            let d = (ddx * ddx + ddy * ddy).sqrt().max(0.01)
+            let light = self.brightness(e.x, e.y)
+            dread = dread.max(1.0 - d / 6.0)
+            let mut speed = if self.oil <= 0.0 { 1.5 } else { 0.95 }
+            let mut dir = 1.0
+            let mut state = e.state
+            let mut timer = e.timer - dt
+            let mut cool = e.cool - dt
+            let mut hp = e.hp
+            // Every so often a shade gathers itself and lunges through the light.
+            if state == S_HUNT && cool <= 0.0 && d < 6.0 {
+                state = S_LUNGE
+                timer = 0.55
+            }
+            if state == S_LUNGE {
+                speed = 3.4
+                if timer <= 0.0 {
+                    state = S_HUNT
+                    cool = (5.0 - self.depth as f64 * 0.4).max(2.0) + self.rf() * 3.0
+                }
+            } else if light > fear {
+                // Light burns them, and they recoil from it.
+                dir = -0.7
+                speed = 1.2
+            }
+            if light > fear { hp -= (light - fear) * 1.6 * dt }
+            if self.flare > 0.0 && d < 11.0 * clampf(self.flare * 2.0, 0.0, 1.0) { hp -= 3.0 * dt }
+            // They drift through rock, but slowly.
+            let step = speed * dir * dt / d
+            let nx = e.x + ddx * step
+            let ny = e.y + ddy * step
+            let slow = if self.solid_at(nx, ny) { 0.4 } else { 1.0 }
+            let fx = e.x + ddx * step * slow
+            let fy = e.y + ddy * step * slow
+            if fx > 0.5 && fy > 0.5 && fx < self.mw as f64 - 0.5 && fy < self.mh as f64 - 0.5 {
+                self.ents[i].x = fx
+                self.ents[i].y = fy
+            }
+            if d < 0.55 {
+                self.hp -= 34.0 * dt
+                self.killer = E_SHADE
+                self.oil = (self.oil - 5.0 * dt).max(0.0)
+                self.hurt = (self.hurt + dt * 2.5).min(0.9)
+                self.safe = 0.0
+                if self.msg_t <= 0.0 { self.say("Cold hands close around you. Burn it away!") }
+            }
+            if hp <= 0.0 {
+                state = S_DYING
+                timer = 0.7
+                self.shades_burned += 1
+            }
+            self.ents[i].state = state
+            self.ents[i].timer = timer
+            self.ents[i].cool = cool
+            self.ents[i].hp = hp
+        }
+        self.dread += (dread - self.dread) * clampf(dt * 3.0, 0.0, 1.0)
+    }
+
+    fn update_hounds(&mut self, dt: f64) {
+        self.path_t -= dt
+        let px = self.px.floor() as i64
+        let py = self.py.floor() as i64
+        if self.path_t <= 0.0 {
+            self.flood(px, py)
+            self.path_t = 0.25
+        }
+        for i in 0..self.ents.len() {
+            let e = self.ents[i]
+            if !e.alive || e.kind != E_HOUND { continue }
+            let ddx = self.px - e.x
+            let ddy = self.py - e.y
+            let d = (ddx * ddx + ddy * ddy).sqrt()
+            let hx = e.x.floor() as i64
+            let hy = e.y.floor() as i64
+            let mut state = e.state
+            let mut timer = e.timer - dt
+            let cool = e.cool - dt
+            if state == H_SLEEP {
+                let pd = self.dist[hy * self.mw + hx]
+                if pd >= 0 && pd < 7 {
+                    state = H_HUNT
+                    if self.msg_t <= 0.0 { self.say("A low growl, close by. Something is coming.") }
+                }
+                self.ents[i].state = state
+                continue
+            }
+            if state == H_FLEE && timer <= 0.0 { state = H_HUNT }
+            // Pick the neighbouring cell that leads toward (or away from) you.
+            let here = self.dist[hy * self.mw + hx]
+            let mut tx = e.x
+            let mut ty = e.y
+            if state == H_HUNT && d < 1.2 {
+                tx = self.px
+                ty = self.py
+            } else {
+                let mut best = here
+                for k in 0..4 {
+                    let nx = hx + dx4(k)
+                    let ny = hy + dy4(k)
+                    if self.solid(nx, ny) { continue }
+                    let nd = self.dist[ny * self.mw + nx]
+                    if nd < 0 { continue }
+                    let better = if state == H_FLEE { nd > best } else { nd < best }
+                    if better {
+                        best = nd
+                        tx = nx as f64 + 0.5
+                        ty = ny as f64 + 0.5
+                    }
+                }
+                if best == here {
+                    tx = hx as f64 + 0.5
+                    ty = hy as f64 + 0.5
+                }
+            }
+            let speed = if state == H_FLEE { 2.4 } else { 2.0 + 0.06 * self.depth as f64 }
+            let mx = tx - e.x
+            let my = ty - e.y
+            let ml = (mx * mx + my * my).sqrt()
+            if ml > 0.01 {
+                let s = (speed * dt).min(ml) / ml
+                self.ents[i].x = e.x + mx * s
+                self.ents[i].y = e.y + my * s
+            }
+            if state == H_HUNT && d < 0.65 && cool <= 0.0 {
+                self.hp -= 17.0
+                self.killer = E_HOUND
+                self.hurt = 0.9
+                self.safe = 0.0
+                self.say("The hound's teeth find you!")
+                self.ents[i].cool = 1.1
+                // It falls back a little after a bite.
+                state = H_FLEE
+                timer = 0.6
+            } else {
+                self.ents[i].cool = cool
+            }
+            self.ents[i].state = state
+            self.ents[i].timer = timer
+        }
+    }
+
+    // --- screens ------------------------------------------------------------
+
+    // Out of the mountain at last: dawn over the peaks.
+    fn render_dawn(&mut self) {
+        let sw = self.sw
+        let sh = self.sh
+        let rise = clampf(self.anim_t * 0.02, 0.0, 0.25)
+        let sun_x = sw as f64 * 0.74
+        let sun_y = sh as f64 * (0.62 - rise)
+        for y in 0..sh {
+            let fy = y as f64 / sh as f64
+            for x in 0..sw {
+                let fx = x as f64 / sw as f64
+                // Sky: night blue at the top to warm gold at the horizon.
+                let mut c = mix(0x1a2446, 0xf0a060, clampf(fy * 1.3 - 0.1, 0.0, 1.0))
+                let dx = x as f64 - sun_x
+                let dy = (y as f64 - sun_y) * 1.0
+                let d = (dx * dx + dy * dy).sqrt() / sh as f64
+                if d < 0.07 { c = 0xfff4d0 } else { c = mix(c, 0xffe0a0, clampf(0.35 - d, 0.0, 0.35)) }
+                // Two ranges of mountains, the far one hazy.
+                let far = 0.55 + 0.12 * vnoise(fx * 5.0, 1.0, 1000, 3) + 0.05 * vnoise(fx * 17.0, 2.0, 1000, 4)
+                let near = 0.68 + 0.14 * vnoise(fx * 3.0 + 7.0, 1.0, 1000, 5) + 0.04 * vnoise(fx * 23.0, 3.0, 1000, 6)
+                if fy > near { c = mix(0x2a1c22, 0x120c10, clampf((fy - near) * 3.0, 0.0, 1.0)) }
+                else if fy > far { c = mix(c, 0x5a4058, 0.75) }
+                self.fb[y * sw + x] = c
+            }
+        }
+    }
+
+    fn frame(&mut self) {
+        if self.mode == M_WON { self.render_dawn() } else {
+            self.render_world()
+            self.render_sprites()
+        }
+        self.post()
+        if self.show_map && self.mode == M_PLAY { self.draw_map() }
+        self.clear_overlay()
+        if self.mode != M_TITLE && !self.help_from_title { self.draw_hud() }
+        if self.mode == M_TITLE { self.title_overlay() }
+        if self.mode == M_PAUSE {
+            let r = self.rows / 3
+            self.text_center(r, "P A U S E D", 0xffd090)
+            self.text_center(r + 2, "Esc or Q: give up and return to the title", 0xc0a080)
+            self.text_center(r + 3, "any other key: keep going", 0xc0a080)
+        }
+        if self.mode == M_HELP { self.help_overlay() }
+        if self.mode == M_DEAD || self.mode == M_WON { self.end_overlay() }
+        self.present()
+    }
+
+    fn dim_all(&mut self, k: f64) {
+        for i in 0..self.sw * self.sh { self.fb[i] = scale(self.fb[i], k) }
+    }
+
+    fn title_overlay(&mut self) {
+        let r = (self.rows / 2 - 7).max(0)
+        let art = [
+            "█▀▀▀ █▄ ▄█ █▀▀▄ █▀▀▀ █▀▀▄ █▀▀▄ █▀▀▀ █▀▀▀ █▀▀▄",
+            "█▀▀  █ ▀ █ █▀▀▄ █▀▀  █▀█  █  █ █▀▀  █▀▀  █▀▀ ",
+            "▀▀▀▀ ▀   ▀ ▀▀▀  ▀▀▀▀ ▀  ▀ ▀▀▀  ▀▀▀▀ ▀▀▀▀ ▀   ",
+        ]
+        for i in 0..3 {
+            let line = art[i]
+            let c = mix(0xffd070, 0xff6020, i as f64 / 2.0)
+            self.text_center(r + i as i64, line, c)
+        }
+        self.text_center(r + 4, "a descent by lantern light", 0xc09070)
+        self.text_center(r + 6, "Find three embers on each level and carry them to the gate.", 0xd0c0a0)
+        self.text_center(r + 7, "Your lantern burns oil. Shades hunt in the dark; light burns them.", 0xd0c0a0)
+        self.text_center(r + 8, "Six levels down, the way out waits.", 0xd0c0a0)
+        let blink = (self.t * 2.0) as i64 % 2 == 0
+        self.text_center(r + 10, "Press ENTER to descend", if blink { 0xffe0a0 } else { 0x907050 })
+        let s = "?  how to play      ESC  quit      seed {self.seed}"
+        self.text_center(r + 12, s.as_str(), 0x8a7a68)
+    }
+
+    fn help_overlay(&mut self) {
+        self.dim_all(0.25)
+        let r = (self.rows / 2 - 9).max(0)
+        let lines = [
+            "HOW TO PLAY",
+            "",
+            "W / S or Up / Down     walk forward and back",
+            "A / D                  step sideways",
+            "Left / Right or Q / E  turn",
+            "Space                  flare: a burst of light (20 oil) that burns",
+            "                       shades and drives hounds off (or burns them",
+            "                       if they are close enough to bite)",
+            "F                      light a brazier (12 oil): a lasting safe light",
+            "M or Tab               map of what you have seen",
+            "Esc                    pause",
+            "",
+            "Shades (red eyes) drift through walls toward you and drain your life.",
+            "Light hurts them, so they lurk at its edge, but now and then one lunges.",
+            "Hounds (yellow eyes) live deeper down and chase you by smell.",
+            "Oil flasks refill the lantern. With no oil, the shades grow bold.",
+            "",
+            "any key to go back",
+        ]
+        for i in 0..lines.len() {
+            let c = if i == 0 { 0xffd090 } else { 0xd0c0a0 }
+            self.text((self.cols - 72).max(0) / 2, r + i as i64, lines[i], c)
+        }
+    }
+
+    fn end_overlay(&mut self) {
+        let won = self.mode == M_WON
+        let r = self.rows / 3
+        if won {
+            self.text_center(r, "Y O U   C A R R Y   T H E   L I G H T   O U T", 0xffe0a0)
+            self.text_center(r + 1, "Dawn breaks gold over the mountains. It has never looked so bright.", 0xd0c0a0)
+        } else {
+            self.text_center(r, "T H E   D A R K   T A K E S   Y O U", 0xff5040)
+            let m = "on depth {self.depth}, with {self.embers} of {NEED_EMBERS} embers in hand"
+            self.text_center(r + 1, m.as_str(), 0xc0a080)
+        }
+        let secs = self.t as i64
+        let st = "time {secs / 60}:{secs % 60 / 10}{secs % 10}   shades burned {self.shades_burned}   flares {self.flares_used}   oil found {self.oil_found}"
+        self.text_center(r + 3, st.as_str(), 0xc0a080)
+        self.text_center(r + 5, "ENTER  try this seed again      N  new seed      ESC  quit", 0xffd090)
+    }
+}
+
+// Play `n` games with the autopilot and report how they went.
+fn simulate(n: i64) {
+    let mut wins = 0
+    let mut reached = [0; LAST_DEPTH + 1]
+    let mut total_t = 0.0
+    let mut timeouts = 0
+    let mut flares = 0
+    let mut burned = 0
+    let mut by_shade = 0
+    let mut by_hound = 0
+    let mut dark_t = 0.0
+    let mut shade_total = 0.0
+    let mut hound_total = 0.0
+    for i in 0..n {
+        let mut g = Game::new(i as u64 + 1)
+        g.bot = true
+        g.cols = 80
+        g.rows = 24
+        g.new_run()
+        let mut dark = 0.0
+        let mut shade_dmg = 0.0
+        let mut hound_dmg = 0.0
+        while g.mode == M_PLAY && g.t < 1500.0 {
+            let before = g.hp
+            g.update(1.0 / 30.0)
+            if g.oil <= 0.0 { dark += 1.0 / 30.0 }
+            if before > g.hp { if g.killer == E_HOUND { hound_dmg += before - g.hp } else { shade_dmg += before - g.hp } }
+        }
+        dark_t += dark
+        shade_total += shade_dmg
+        hound_total += hound_dmg
+        let last_hp = g.hp
+        reached[g.depth] += 1
+        total_t += g.t
+        flares += g.flares_used
+        burned += g.shades_burned
+        if g.mode == M_WON { wins += 1 }
+        else if g.mode == M_DEAD { if g.killer == E_HOUND { by_hound += 1 } else { by_shade += 1 } }
+        else { timeouts += 1 }
+        eprint("game {i + 1}: depth {g.depth} {if g.mode == M_WON { "won" } else if g.mode == M_DEAD { "died" } else { "stuck" }} after {g.t as i64}s, oil found {g.oil_found}, flares {g.flares_used}, hp {last_hp as i64}")
+    }
+    print("{n} games: {wins} won, {by_shade} killed by shades, {by_hound} by hounds, {timeouts} stuck")
+    print("ended on depth: {reached}")
+    print("average {(total_t / n as f64) as i64}s per game, {flares / n} flares, {burned / n} shades burned")
+    print("average {(dark_t / n as f64) as i64}s with no oil, damage from shades {(shade_total / n as f64) as i64}, from hounds {(hound_total / n as f64) as i64}")
+}
+
+fn main() {
+    let a = args()
+    let mut seed = ((time_ns() / 1000) % 100000) as u64
+    if a.len() > 1 && a[1] != "--dev" {
+        match a[1].parse_int() {
+            Ok(n) => { seed = n as u64 }
+            Err(_) => {}
+        }
+    }
+    let mut g = Game::new(seed)
+    for i in 1..a.len() {
+        if a[i] == "--sim" {
+            simulate(if i + 1 < a.len() { a[i + 1].parse_int().unwrap_or(50) } else { 50 })
+            return
+        }
+    }
+    for i in 1..a.len() {
+        if a[i] == "--bench" {
+            g.resize()
+            g.gen_level()
+            g.mode = M_PLAY
+            g.intro = 0.0
+            let t0 = time_ns()
+            for f in 0..200 {
+                g.pa += 0.03
+                g.render_world()
+                g.render_sprites()
+                g.post()
+                g.clear_overlay()
+                g.draw_hud()
+                if f % 2 == 0 { g.present() }
+            }
+            let ms = (time_ns() - t0) as f64 / 1e6 / 200.0
+            eprint("{g.cols}x{g.rows}: {ms} ms per frame")
+            return
+        }
+    }
+    for i in 1..a.len() {
+        if a[i] == "--dev" { g.dev = true }
+    }
+    g.resize()
+    g.gen_level()
+    g.mode = M_TITLE
+    print("\x1b[?25l\x1b[?1049h\x1b[2J", end: "")
+    let mut last = time_ns()
+    let mut size_t = 0.0
+    let mut quit = false
+    while !quit {
+        let now = time_ns()
+        let dt = clampf((now - last) as f64 / 1e9, 0.0, 0.1)
+        last = now
+        size_t += dt
+        if size_t > 0.5 {
+            size_t = 0.0
+            g.resize()
+        }
+        // Read every key that is waiting.
+        loop {
+            let k = poll_key()
+            if k == 0 { break }
+            if k < 0 { quit = true; break }
+            if g.mode == M_TITLE {
+                if k == K_ENTER || k == ' ' as i64 { g.new_run() }
+                else if k == '?' as i64 || k == 'h' as i64 { g.mode = M_HELP; g.help_from_title = true }
+                else if k == K_ESC || k == 'q' as i64 { quit = true; break }
+            } else if g.mode == M_PLAY {
+                g.handle_key(k)
+            } else if g.mode == M_PAUSE {
+                if k == K_ESC || k == 'q' as i64 || k == 'Q' as i64 {
+                    g.depth = 1
+                    g.gen_level()
+                    g.mode = M_TITLE
+                } else { g.mode = M_PLAY }
+            } else if g.mode == M_HELP {
+                g.mode = if g.help_from_title { M_TITLE } else { M_PLAY }
+                g.help_from_title = false
+            } else {
+                if k == K_ENTER || k == ' ' as i64 { g.new_run() }
+                else if k == 'n' as i64 || k == 'N' as i64 {
+                    g.seed = ((time_ns() / 1000) % 100000) as u64
+                    g.new_run()
+                } else if k == K_ESC || k == 'q' as i64 { quit = true; break }
+            }
+        }
+        if quit { break }
+        if g.mode == M_PLAY {
+            g.update(dt)
+        } else if g.mode == M_TITLE {
+            // The title screen slowly looks around the first hall.
+            g.t += dt
+            g.pa += dt * 0.15
+            g.lantern_r = 6.5 + (g.t * 11.0).sin() * 0.15
+            g.lantern_i = 1.0
+            g.pulse = 0.95 + 0.05 * (g.t * 2.3).sin()
+        } else {
+            g.hurt = (g.hurt - dt).max(0.0)
+            g.anim_t += dt
+        }
+        g.frame()
+        let spent = (time_ns() - now) / 1000000
+        sleep_ms((33 - spent).max(1))
+    }
+    print("\x1b[0m\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h", end: "")
+}

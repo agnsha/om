@@ -140,6 +140,19 @@ print(p)                    // Point { x: 3, y: 10 }
 Struct values are plain data: assigning one copies it. Any struct or enum can
 be printed with `print`, with no `derive` needed.
 
+A field can have a default value, used when a struct literal leaves it out.
+This keeps a big state struct to one list of fields instead of two:
+
+```om
+struct Player { name: String, hp: f64 = 100.0, bag: Vec[Item] = Vec::new() }
+
+let p = Player { name: "Ash" }              // hp 100, empty bag
+let q = Player { name: "Bo", hp: 50.0 }
+```
+
+*Why:* Rust needs `..Default::default()` and a `Default` impl that lists every
+field a second time. Field defaults are in Kotlin, Swift, C# and Zig.
+
 ## Enums and match
 
 ```om
@@ -512,6 +525,12 @@ cost a round trip. All of them do what the code obviously means.
 - **`*x` on a plain value is the value**: Om references are not pointers, so
   a Rust-style `*x` on a loop variable from `for x in &list` or on a `&`
   parameter simply reads `x`.
+- **Integers of different types compare by value**: `i < list.len()` with
+  `i: i64` works, and a negative `i` is less than any `usize`. Arithmetic
+  between different integer types still needs `as`.
+- **A `(` or `[` that starts a line starts a new expression**, so a block can
+  end with a tuple after a line that ends in a name:
+  `let s = a + b` then `(s, a * b)` on the next line is not a call of `b`.
 
 ## Built-in functions
 
@@ -521,7 +540,7 @@ cost a round trip. All of them do what the code obviously means.
 | `eprint(x)` | Like `print`, to stderr (also takes `end:`) |
 | `panic(msg)` | Prints `panic: msg` to stderr and exits with code 101 |
 | `assert(cond)`, `assert(cond, msg)` | Panics if `cond` is false |
-| `read_key()` | Waits for one key and returns it as an `i64`: the byte (`'a' as i64`, `10` for Enter, `27` for Esc), `1000`..`1003` for the arrow keys (up, down, right, left), or `-1` at the end of input. On a terminal the key is not echoed and needs no Enter; with piped input it reads one byte. |
+| `read_key()` | Waits for one key and returns it as an `i64`: the byte (`'a' as i64`, `10` for Enter, `27` for Esc), `1000`..`1003` for the arrow keys (up, down, right, left), or `-1` at the end of input. On a terminal the key is not echoed and needs no Enter; with piped input it reads one byte. Once a program reads keys, Ctrl+C puts the terminal back (colours, cursor, main screen) before stopping it. |
 | `time_ns()` | Nanoseconds since 1970, as an `i64` (for timing and random seeds) |
 | `sleep_ms(ms)` | Flushes output and pauses for `ms` milliseconds |
 | `poll_key()` | Like `read_key()` but never waits: `0` when no key is waiting. For real-time programs that check keys once per frame. |

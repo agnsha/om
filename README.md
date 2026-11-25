@@ -173,6 +173,19 @@ See [`examples/modern.om`](examples/modern.om) and the [language reference](docs
 See the [language reference](docs/language.md), the [`examples/`](examples) folder, and the
 [Rust parity checklist](docs/rust-parity.md) for what is done and what is next.
 
+## Games written in Om
+
+Two complete terminal games, each with notes on what the language made hard
+(most of which has since been fixed in the compiler):
+
+- [Emberdeep](games/emberdeep): a first-person descent by lantern light, drawn
+  with a true-colour raycaster, with baked shadows, procedural textures,
+  billboard sprites and creatures that hunt you in the dark.
+  `om run games/emberdeep/emberdeep.om`
+- [The Hollow Bell](games/hollow-bell): a stealth roguelike where sound
+  travels through the halls and you fight by composing spoken spells.
+  `om run games/hollow-bell/hollow_bell.om`
+
 ## How the compiler works
 
 ```text

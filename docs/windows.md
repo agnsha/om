@@ -69,7 +69,11 @@ From the `om` folder:
 ```powershell
 om run examples/hello.om
 om run games/hollow-bell/hollow_bell.om
+om run games/emberdeep/emberdeep.om
 ```
+
+The games need a terminal with colour; Emberdeep's 3D view needs true colour,
+which Windows Terminal (the default on Windows 11) has.
 
 Build a standalone program you can share. The `.exe` needs nothing else
 installed to run:
