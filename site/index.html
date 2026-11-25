@@ -55,6 +55,11 @@ header.nav nav a:hover,header.nav nav a:focus-visible{color:var(--red)}
 .stn::before{content:"";position:absolute;top:8px;left:0;right:0;height:8px;background:var(--red)}
 .stn::after{content:"";position:absolute;top:2px;left:0;width:20px;height:20px;border-radius:50%;background:var(--bg);border:5px solid var(--red)}
 .alt .stn::after{background:var(--soft)}
+.xg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 32px;margin-top:24px}
+.xg>div{border-top:3px solid var(--ink);padding-top:14px}
+.xg .from{color:var(--red);font-weight:600;font-size:14px;margin:0 0 10px}
+.xg pre{background:#111;color:#eaeaea;margin:0;padding:14px 16px;overflow-x:auto;font-size:14px;line-height:1.55}
+@media(max-width:760px){.xg{grid-template-columns:minmax(0,1fr)}}
 .stn:last-child::before{right:auto;width:20px;background:var(--ink)}
 .stn:last-child::after{border-color:var(--ink)}
 .stn b{display:block;font-stretch:112%}
@@ -91,7 +96,7 @@ footer nav{display:flex;gap:20px;flex-wrap:wrap;font-weight:600}
 <header class="nav">
 <a class="logo" href="#"><i></i>Om</a>
 <nav aria-label="Main">
-<a href="#why">Why Om</a><a href="#compiler">How it works</a><a href="#vs">Om vs Rust</a><a href="#roadmap">Roadmap</a><a href="#install">Install</a><a href="https://github.com/agnsha/om">GitHub</a>
+<a href="#why">Why Om</a><a href="#extras">Beyond Rust</a><a href="#compiler">How it works</a><a href="#vs">Om vs Rust</a><a href="#roadmap">Roadmap</a><a href="#install">Install</a><a href="https://github.com/agnsha/om">GitHub</a>
 </nav>
 </header>
 
@@ -136,7 +141,29 @@ Hello, Om!
 <p class="note" style="margin-top:14px">These are design goals. Benchmarks against Rust, C and Go arrive in phase 5 and will be published in full, including where Om is slower.</p>
 </div></section>
 
-<section class="band alt" id="compiler"><div class="wrap">
+<section class="band alt" id="extras"><div class="wrap">
+<h2>Features Rust doesn't have, working today</h2>
+<p>Om borrows features programmers keep asking Rust for, already proven in other languages.</p>
+<div class="xg">
+<div><h3>Default and named arguments</h3><p class="from">From Python, Kotlin, Swift</p>
+<pre><span class="k">fn</span> <span class="f">area</span>(w: i64, h: i64 = <span class="n">1</span>, scale: i64 = <span class="n">1</span>) -&gt; i64 {
+    w * h * scale
+}
+<span class="f">area</span>(<span class="n">5</span>, scale: <span class="n">3</span>)   <span class="c">// 15</span></pre></div>
+<div><h3>Pipeline operator</h3><p class="from">From Elixir, F#, Gleam</p>
+<pre><span class="k">let</span> r = <span class="n">3</span> |&gt; <span class="f">double</span> |&gt; <span class="f">add</span>(<span class="n">4</span>) |&gt; <span class="f">square</span>
+<span class="c">// square(add(double(3), 4)) = 100</span></pre></div>
+<div><h3>Interpolate any expression</h3><p class="from">From Python, Kotlin, Swift</p>
+<pre><span class="f">print</span>(<span class="s">"6 * 7 = {6 * 7}, fib = {fib(10)}"</span>)
+<span class="c">// Rust's format! only takes plain names</span></pre></div>
+<div><h3>defer</h3><p class="from">From Zig, Go, Swift</p>
+<pre><span class="f">print</span>(<span class="s">"open {n}"</span>)
+<span class="k">defer</span> <span class="f">print</span>(<span class="s">"close {n}"</span>)
+<span class="k">if</span> n &lt; <span class="n">0</span> { <span class="k">return</span> <span class="n">0</span> }  <span class="c">// still closes</span></pre></div>
+</div>
+</div></section>
+
+<section class="band" id="compiler"><div class="wrap">
 <h2>From source to native binary in five stations</h2>
 <p>The compiler is written in Rust and split into small crates you can read in an afternoon.</p>
 <div class="route">
@@ -149,7 +176,7 @@ Hello, Om!
 </div>
 </div></section>
 
-<section class="band" id="vs"><div class="wrap">
+<section class="band alt" id="vs"><div class="wrap">
 <h2>Om and Rust, honestly</h2>
 <div class="scroll"><table>
 <thead><tr><th>Area</th><th>Rust</th><th>Om plan</th><th>Edge</th></tr></thead>
@@ -163,12 +190,12 @@ Hello, Om!
 </tbody></table></div>
 </div></section>
 
-<section class="band alt" id="roadmap"><div class="wrap">
+<section class="band" id="roadmap"><div class="wrap">
 <h2>Roadmap</h2>
 <div class="tt" id="tt"></div>
 </div></section>
 
-<section class="band" id="install"><div class="wrap two">
+<section class="band alt" id="install"><div class="wrap two">
 <div>
 <h2>Install and run</h2>
 <p>You need Rust stable and a C compiler (<code>cc</code>, <code>gcc</code> or <code>clang</code>). Works on Linux and macOS, x86-64 and ARM64.</p>
@@ -187,7 +214,7 @@ om check app.om            # type-check only</pre></div>
 </div>
 </div></section>
 
-<section class="band alt"><div class="wrap two">
+<section class="band"><div class="wrap two">
 <div>
 <h2>Help build a language</h2>
 <p>Om is open source under MIT or Apache 2.0. Small contributions matter: a clearer error message, a new example program, a test for an edge case.</p>
@@ -207,6 +234,7 @@ om check app.om            # type-check only</pre></div>
 {
 const phases=[
  ["0","Lexer, parser, Cranelift native backend, CLI, tests, CI","done"],
+ ["0.5","Default and named arguments, pipeline operator, interpolation, defer","done"],
  ["1","Core language: more integer types, for loops, a separate checker","next"],
  ["2","Structs, moves, scoped borrows and the ownership checker","planned"],
  ["3","Enums, pattern matching, generics, interfaces, Result and ?","planned"],

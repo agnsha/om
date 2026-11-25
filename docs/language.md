@@ -21,6 +21,24 @@ later phases are in the [design document](design.md).
 Integer literals may use `_` as a separator: `1_000_000`.
 String escapes: `\n \t \r \0 \\ \"`.
 
+### String interpolation
+
+Any expression can go inside `{...}` in a string literal. Write `{{` and `}}`
+for literal braces.
+
+```om
+let name = "Om"
+print("Hello from {name}! 6 * 7 = {6 * 7}, big: {fib(30) > 1000}")
+```
+
+In phase 0, interpolated strings can only be passed to `print`: Om has no
+runtime strings until phase 4. Inside `{...}`, nested string literals are not
+allowed.
+
+*Why:* Rust's `format!` only accepts plain variable names inline
+(`{name}` works, `{a + b}` does not). Python, Kotlin, Swift and JavaScript
+allow any expression.
+
 ## Variables
 
 ```om
@@ -48,6 +66,30 @@ fn greet() {           // no `->` means it returns nothing
 Parameters must have types. Functions may be declared in any order and may be
 recursive. `return` exits early: `return a + b`.
 
+### Default and named arguments
+
+A parameter can have a default value, used when a call leaves it out. Defaults
+must be constants (a number, `true`/`false` or a string), and once one
+parameter has a default, every later parameter needs one too.
+
+```om
+fn area(width: i64, height: i64 = 1, scale: i64 = 1) -> i64 {
+    width * height * scale
+}
+
+area(5)                       // 5
+area(5, 2)                    // 10
+area(5, scale: 3)             // skip height, name scale
+area(height: 4, width: 2)     // any order when named
+```
+
+Positional arguments come first, then named ones. Arguments are evaluated in
+the order they are written. Naming an argument that doesn't exist, giving one
+twice, or leaving out one with no default is a compile error.
+
+*Why:* Rust has no default or named arguments (requested since 2014), so APIs
+fall back to builder types or many function variants.
+
 ## Control flow
 
 `if` is an expression. Both branches must have the same type, unless one of
@@ -67,6 +109,28 @@ while i < 10 {
 ```
 
 Conditions must be `bool`; `if 1 { }` is an error.
+
+## defer
+
+`defer expr` schedules `expr` to run when the enclosing block exits, whether it
+ends normally or through `return`. Several defers run newest first.
+
+```om
+fn process(n: i64) -> i64 {
+    print("open {n}")
+    defer print("close {n}")       // always runs, even on the early return
+    if n < 0 { return 0 }
+    defer print("finished {n}")    // runs before "close"
+    n * 10
+}
+```
+
+Like Zig and Swift, the deferred expression is evaluated when it runs, so it
+sees variables' values at the moment the block exits. The return value is
+computed before defers run. `return` is not allowed inside a `defer`.
+
+*Why:* Rust runs cleanup through `Drop`, which needs a type per cleanup
+action. `defer` (Zig, Go, Swift) puts the cleanup next to the setup.
 
 ## Blocks
 
@@ -96,11 +160,21 @@ From lowest to highest precedence:
 | `* / %` | i64. Division by zero stops the program. |
 | unary `-` `!` | i64, bool |
 
+`|>` (pipeline) binds loosest of all. `x |> f(a, b)` means `f(x, a, b)`, and
+`x |> f` means `f(x)`. Chains read left to right:
+
+```om
+let result = 3 |> double |> add(4) |> square    // square(add(double(3), 4)) = 100
+```
+
+*Why:* Rust needs nested calls or method syntax on a trait. Pipelines are a
+favourite in Elixir, F# and Gleam, and JavaScript has a proposal for one.
+
 ## Built-in functions
 
 | Function | Effect |
 |---|---|
-| `print(x)` | Prints an `i64`, `bool` or `str` followed by a newline |
+| `print(x)` | Prints an `i64`, `bool`, `str` or interpolated string, followed by a newline |
 
 ## Program entry
 

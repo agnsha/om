@@ -72,6 +72,58 @@ fn language_features() {
     assert_eq!(out, "42\nnegative\nzero\npositive\n3\n2\n12\ntrue\ntrue\n30\n");
 }
 
+#[test]
+fn defer_runs_in_reverse_on_every_exit() {
+    let src = r#"
+        fn find(limit: i64) -> i64 {
+            defer print("outer done")
+            let mut i = 0
+            while i < limit {
+                defer print("iteration {i}")
+                if i == 2 {
+                    defer print("found it")
+                    return i
+                }
+                i = i + 1
+            }
+            -1
+        }
+        fn main() {
+            print(find(5))
+            print(find(1))
+        }
+    "#;
+    let out = build_and_run(src, "defer");
+    assert_eq!(
+        out,
+        // Like Zig and Swift, a deferred expression is evaluated when it runs, so it
+        // sees `i` after the increment.
+        "iteration 1\niteration 2\nfound it\niteration 2\nouter done\n2\n\
+         iteration 1\nouter done\n-1\n"
+    );
+}
+
+#[test]
+fn named_default_pipe_and_interpolation() {
+    let src = r#"
+        fn greet(name: str, punct: str = "!", times: i64 = 1) {
+            let mut i = 0
+            while i < times {
+                print("hi {name}{punct}")
+                i = i + 1
+            }
+        }
+        fn inc(x: i64, by: i64 = 1) -> i64 { x + by }
+        fn main() {
+            greet("ana")
+            greet(times: 2, name: "bo", punct: "?")
+            print(1 |> inc |> inc(by: 10))
+            print("{-5} {true && false} {inc(1)}{inc(2)}")
+        }
+    "#;
+    assert_eq!(build_and_run(src, "features2"), "hi ana!\nhi bo?\nhi bo?\n12\n-5 false 23\n");
+}
+
 fn compile_error(src: &str) -> String {
     omc::compile(src).expect_err("program should be rejected").message
 }
@@ -89,6 +141,16 @@ fn rejects_bad_programs() {
         ("fn helper() {}", "no `fn main()`"),
         ("fn main() { let s: str = 5 }", "declared as str but its value is i64"),
         ("fn main() { let v = if true { 1 } else { false } }", "different types"),
+        ("fn f(a: i64 = 1, b: i64) {} fn main() {}", "`b` needs a default"),
+        ("fn f(a: i64 = true) {} fn main() {}", "default for `a` is bool"),
+        ("fn f(a: i64 = 1 + 1) {} fn main() {}", "must be constants"),
+        ("fn f(a: i64) {} fn main() { f(b: 1) }", "no parameter named `b`"),
+        ("fn f(a: i64, b: i64) {} fn main() { f(a: 1, 2) }", "positional arguments must come before"),
+        ("fn f(a: i64) {} fn main() { f(1, a: 2) }", "given twice"),
+        ("fn f(a: i64, b: i64) {} fn main() { f(1) }", "missing argument `b`"),
+        ("fn main() { let s = \"x{1}\" }", "only be used inside `print`"),
+        ("fn f() -> i64 { defer { return 1 } 2 } fn main() {}", "not allowed inside `defer`"),
+        ("fn main() { print(1 |> 2) }", "right side of `|>`"),
     ];
     for (src, want) in cases {
         let got = compile_error(src);

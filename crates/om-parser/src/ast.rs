@@ -21,6 +21,8 @@ pub struct Function {
 pub struct Param {
     pub name: String,
     pub ty: TypeExpr,
+    /// Default value used when a call leaves this argument out: `count: i64 = 1`.
+    pub default: Option<Expr>,
     pub span: Span,
 }
 
@@ -41,10 +43,32 @@ pub struct Block {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Let { name: String, mutable: bool, ty: Option<TypeExpr>, value: Expr, span: Span },
-    Assign { name: String, value: Expr, span: Span },
-    While { cond: Expr, body: Block, span: Span },
-    Return { value: Option<Expr>, span: Span },
+    Let {
+        name: String,
+        mutable: bool,
+        ty: Option<TypeExpr>,
+        value: Expr,
+        span: Span,
+    },
+    Assign {
+        name: String,
+        value: Expr,
+        span: Span,
+    },
+    While {
+        cond: Expr,
+        body: Block,
+        span: Span,
+    },
+    Return {
+        value: Option<Expr>,
+        span: Span,
+    },
+    /// `defer expr`: run `expr` when the enclosing block exits, in reverse order.
+    Defer {
+        body: Expr,
+        span: Span,
+    },
     Expr(Expr),
 }
 
@@ -85,7 +109,23 @@ pub enum ExprKind {
     Var(String),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
-    Call(String, Vec<Expr>),
+    Call(String, Vec<Arg>),
+    /// An interpolated string: `"x = {x}"`.
+    Interp(Vec<InterpPart>),
     If(Box<Expr>, Block, Option<Block>),
     Block(Block),
+}
+
+/// A call argument, optionally named: `f(1, width: 2)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arg {
+    pub name: Option<String>,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpPart {
+    Lit(String),
+    Expr(Expr),
 }

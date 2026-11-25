@@ -42,9 +42,16 @@ blocks, and the merge block takes a block parameter for the `if`'s value.
 `&&` and `||` short-circuit the same way. After `return`, lowering continues in
 an unreachable block so code after it still type-checks.
 
+Newer features are mostly desugaring: the parser rewrites `x |> f(a)` into
+`f(x, a)`, and parses each `{...}` inside a string with a nested parser whose
+spans are shifted to point at the original file. Named and default arguments
+are matched to parameter slots in `Lower::call`. `defer` keeps a stack of
+deferred expressions per scope and emits them at every exit point (end of
+block and each `return`), newest first, the same way Zig does.
+
 Om functions are exported as `om_<name>`; Om's `main` becomes the C `main`
-symbol so the object links like a C program. Output goes through libc's `puts`
-and a two-line C runtime (`RUNTIME_C`) for printing integers, because
+symbol so the object links like a C program. Output goes through a tiny C runtime
+(`RUNTIME_C`, two functions: write a string, write an integer), because
 Cranelift cannot call variadic functions like `printf` portably.
 
 ## omc

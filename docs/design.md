@@ -47,6 +47,29 @@ fn parse_port(text: &str) -> Result[u16, Error] {
 - Local type inference only: function signatures are always written out.
 - No implicit copies of large values and no implicit allocation.
 
+## Features Rust lacks that Om includes
+
+Om picks features that programmers ask Rust for and that other languages have
+already proven. Shipped in phase 0.5:
+
+| Feature | From | Rust today |
+|---|---|---|
+| Default and named arguments | Python, Kotlin, Swift, C# | No; builder patterns instead |
+| Pipeline operator `\|>` | Elixir, F#, Gleam, OCaml | No; nested calls or trait methods |
+| String interpolation of any expression | Python, Kotlin, Swift, JS | Only plain variable names in `format!` |
+| `defer` | Zig, Go, Swift | No; `Drop` types or scope-guard crates |
+
+Planned, as the type system grows:
+
+| Feature | From | Phase |
+|---|---|---|
+| Compile-time function execution (`comptime`) without const-fn limits | Zig | 3 |
+| Union and intersection error types, `catch` with exhaustive handling | Zig, TypeScript | 3 |
+| Built-in test blocks (`test "name" { ... }`) and `om test` | Zig, D | 4 |
+| Regions (named arenas) as a language feature | Cyclone, Vale | 4 |
+| Structured concurrency with task groups | Swift, Kotlin, Trio | 6 |
+| Hot reload of functions in dev builds (Cranelift JIT) | Erlang, Dart | 6 |
+
 ## Memory model: ownership without lifetimes
 
 Rust's borrow checker lets a reference be stored anywhere, which is why
@@ -143,6 +166,7 @@ Self-hosting is a late, optional goal. See [architecture.md](architecture.md).
 | Phase | Work | Result |
 |---|---|---|
 | 0 | Workspace, lexer, parser, Cranelift backend, CLI, tests, CI, docs, website | Native hello world ✅ |
+| 0.5 | Default and named arguments, `\|>`, string interpolation, `defer` | Features Rust lacks ✅ |
 | 1 | Integer types, `for`, `om-check` crate, better errors | fizzbuzz, primes, small programs |
 | 2 | Structs, moves, copy types, scoped borrows, ownership checker | Memory safety without GC or lifetimes |
 | 3 | Enums, `match`, generics, interfaces, `Result` and `?` | Algebraic data types and generics |

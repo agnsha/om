@@ -28,6 +28,8 @@ pub enum TokenKind {
     // Literals and names
     Int(i64),
     Str(String),
+    /// A string containing `{expr}` interpolations.
+    InterpStr(Vec<StrPart>),
     Ident(String),
     // Keywords
     Fn,
@@ -37,6 +39,7 @@ pub enum TokenKind {
     Else,
     While,
     Return,
+    Defer,
     True,
     False,
     // Punctuation
@@ -63,6 +66,8 @@ pub enum TokenKind {
     GtEq,
     AndAnd,
     OrOr,
+    /// `|>`, the pipeline operator.
+    PipeGt,
     Bang,
     Eof,
 }
@@ -72,7 +77,7 @@ impl fmt::Display for TokenKind {
         use TokenKind::*;
         let s = match self {
             Int(n) => return write!(f, "integer `{n}`"),
-            Str(_) => "string literal",
+            Str(_) | InterpStr(_) => "string literal",
             Ident(name) => return write!(f, "identifier `{name}`"),
             Fn => "`fn`",
             Let => "`let`",
@@ -81,6 +86,7 @@ impl fmt::Display for TokenKind {
             Else => "`else`",
             While => "`while`",
             Return => "`return`",
+            Defer => "`defer`",
             True => "`true`",
             False => "`false`",
             LParen => "`(`",
@@ -105,11 +111,21 @@ impl fmt::Display for TokenKind {
             GtEq => "`>=`",
             AndAnd => "`&&`",
             OrOr => "`||`",
+            PipeGt => "`|>`",
             Bang => "`!`",
             Eof => "end of file",
         };
         f.write_str(s)
     }
+}
+
+/// One piece of an interpolated string.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    /// Literal text.
+    Lit(String),
+    /// Source code of an embedded expression, and the byte offset where it starts.
+    Code(String, usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +233,7 @@ impl<'a> Lexer<'a> {
     fn string(&mut self) -> Result<TokenKind, LexError> {
         let start = self.pos;
         self.pos += 1; // opening quote
+        let mut parts = Vec::new();
         let mut s = String::new();
         loop {
             let Some(c) = self.src[self.pos..].chars().next() else {
@@ -224,7 +241,7 @@ impl<'a> Lexer<'a> {
             };
             self.pos += c.len_utf8();
             match c {
-                '"' => return Ok(TokenKind::Str(s)),
+                '"' => break,
                 '\\' => {
                     let esc = self.peek(0);
                     self.pos += 1;
@@ -238,9 +255,58 @@ impl<'a> Lexer<'a> {
                         _ => return self.err("unknown escape sequence", self.pos - 2),
                     });
                 }
+                '{' if self.peek(0) == Some(b'{') => {
+                    self.pos += 1;
+                    s.push('{');
+                }
+                '}' if self.peek(0) == Some(b'}') => {
+                    self.pos += 1;
+                    s.push('}');
+                }
+                '}' => return self.err("unmatched `}` in string; write `}}` for a literal brace", self.pos - 1),
+                '{' => {
+                    if !s.is_empty() {
+                        parts.push(StrPart::Lit(std::mem::take(&mut s)));
+                    }
+                    let code_start = self.pos;
+                    let mut depth = 1;
+                    loop {
+                        match self.peek(0) {
+                            None | Some(b'\n') => {
+                                return self.err("unterminated `{` in string interpolation", code_start - 1)
+                            }
+                            Some(b'"') => return self.err(
+                                "unterminated `{` in string interpolation (strings cannot be nested inside `{...}`)",
+                                code_start - 1,
+                            ),
+                            Some(b'{') => depth += 1,
+                            Some(b'}') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.pos += 1;
+                    }
+                    let code = self.src[code_start..self.pos].to_string();
+                    self.pos += 1; // closing brace
+                    if code.trim().is_empty() {
+                        return self.err("empty `{}` in string; write `{{}}` for literal braces", code_start - 1);
+                    }
+                    parts.push(StrPart::Code(code, code_start));
+                }
                 c => s.push(c),
             }
         }
+        if parts.is_empty() {
+            return Ok(TokenKind::Str(s));
+        }
+        if !s.is_empty() {
+            parts.push(StrPart::Lit(s));
+        }
+        Ok(TokenKind::InterpStr(parts))
     }
 
     fn ident(&mut self) -> TokenKind {
@@ -256,6 +322,7 @@ impl<'a> Lexer<'a> {
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
             "return" => TokenKind::Return,
+            "defer" => TokenKind::Defer,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             name => TokenKind::Ident(name.to_string()),
@@ -274,6 +341,7 @@ impl<'a> Lexer<'a> {
             (b'>', Some(b'=')) => (GtEq, 2),
             (b'&', Some(b'&')) => (AndAnd, 2),
             (b'|', Some(b'|')) => (OrOr, 2),
+            (b'|', Some(b'>')) => (PipeGt, 2),
             (b'(', _) => (LParen, 1),
             (b')', _) => (RParen, 1),
             (b'{', _) => (LBrace, 1),
@@ -358,6 +426,29 @@ mod tests {
     #[test]
     fn string_escapes() {
         assert_eq!(kinds(r#""a\n\"b\"""#), vec![Str("a\n\"b\"".into()), Eof]);
+    }
+
+    #[test]
+    fn interpolation() {
+        assert_eq!(
+            kinds(r#""n = {n + 1}!""#),
+            vec![
+                InterpStr(vec![
+                    StrPart::Lit("n = ".into()),
+                    StrPart::Code("n + 1".into(), 6),
+                    StrPart::Lit("!".into())
+                ]),
+                Eof
+            ]
+        );
+        assert_eq!(kinds(r#""{{x}}""#), vec![Str("{x}".into()), Eof]);
+        assert!(lex(r#""{}""#).unwrap_err().message.contains("empty"));
+        assert!(lex(r#""{x""#).unwrap_err().message.contains("unterminated"));
+    }
+
+    #[test]
+    fn pipe_and_defer() {
+        assert_eq!(kinds("defer x |> f"), vec![Defer, Ident("x".into()), PipeGt, Ident("f".into()), Eof]);
     }
 
     #[test]

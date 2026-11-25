@@ -5,14 +5,16 @@
 //! ```text
 //! program  = function*
 //! function = "fn" IDENT "(" (param ("," param)*)? ")" ("->" type)? block
-//! param    = IDENT ":" type
+//! param    = IDENT ":" type ("=" expr)?
 //! block    = "{" stmt* expr? "}"
 //! stmt     = "let" "mut"? IDENT (":" type)? "=" expr ";"?
 //!          | IDENT "=" expr ";"?
 //!          | "while" expr block
 //!          | "return" expr? ";"?
+//!          | "defer" expr ";"?
 //!          | expr ";"?
-//! expr     = precedence climbing over || && comparisons + - * / % and unary - !
+//! expr     = precedence climbing over |> || && comparisons + - * / % and unary - !
+//! args     = (arg ("," arg)*)?      arg = (IDENT ":")? expr
 //! primary  = INT | STR | true | false | IDENT | IDENT "(" args ")" | "(" expr ")"
 //!          | "if" expr block ("else" (block | if))? | block
 //! ```
@@ -22,7 +24,7 @@
 pub mod ast;
 
 use ast::*;
-use om_lexer::{lex, LexError, Span, Token, TokenKind as T};
+use om_lexer::{lex, LexError, Span, StrPart, Token, TokenKind as T};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,7 +136,9 @@ impl Parser {
             let (pname, pspan) = self.ident()?;
             self.expect(T::Colon)?;
             let ty = self.ty()?;
-            params.push(Param { name: pname, span: pspan.to(ty.span), ty });
+            let default = if self.eat(&T::Eq) { Some(self.expr()?) } else { None };
+            let end = default.as_ref().map_or(ty.span, |d| d.span);
+            params.push(Param { name: pname, span: pspan.to(end), ty, default });
             if !self.eat(&T::Comma) {
                 break;
             }
@@ -187,6 +191,11 @@ impl Parser {
                 let value = if matches!(self.peek().kind, T::Semi | T::RBrace) { None } else { Some(self.expr()?) };
                 Ok(Stmt::Return { value, span: start.to(self.prev_span()) })
             }
+            T::Defer => {
+                self.bump();
+                let body = self.expr()?;
+                Ok(Stmt::Defer { span: start.to(body.span), body })
+            }
             T::Ident(_) if self.peek_at(1) == &T::Eq => {
                 let (name, _) = self.ident()?;
                 self.bump(); // `=`
@@ -205,6 +214,15 @@ impl Parser {
     fn binary(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.unary()?;
         loop {
+            if self.at(&T::PipeGt) {
+                if min_prec > 0 {
+                    return Ok(lhs);
+                }
+                self.bump();
+                let rhs = self.binary(1)?;
+                lhs = pipe(lhs, rhs)?;
+                continue;
+            }
             let (op, prec) = match self.peek().kind {
                 T::OrOr => (BinOp::Or, 1),
                 T::AndAnd => (BinOp::And, 2),
@@ -256,6 +274,10 @@ impl Parser {
                 self.bump();
                 ExprKind::Str(s)
             }
+            T::InterpStr(parts) => {
+                self.bump();
+                ExprKind::Interp(parts.into_iter().map(interp_part).collect::<PResult<_>>()?)
+            }
             T::True | T::False => {
                 self.bump();
                 ExprKind::Bool(tok.kind == T::True)
@@ -265,7 +287,7 @@ impl Parser {
                 if self.eat(&T::LParen) {
                     let mut args = Vec::new();
                     while !self.at(&T::RParen) {
-                        args.push(self.expr()?);
+                        args.push(self.arg()?);
                         if !self.eat(&T::Comma) {
                             break;
                         }
@@ -292,6 +314,20 @@ impl Parser {
         Ok(Expr { kind, span })
     }
 
+    fn arg(&mut self) -> PResult<Arg> {
+        let start = self.peek().span;
+        let name = match (self.peek().kind.clone(), self.peek_at(1)) {
+            (T::Ident(n), T::Colon) => {
+                self.bump();
+                self.bump();
+                Some(n)
+            }
+            _ => None,
+        };
+        let value = self.expr()?;
+        Ok(Arg { name, span: start.to(value.span), value })
+    }
+
     fn if_expr(&mut self) -> PResult<Expr> {
         let start = self.expect(T::If)?;
         let cond = self.expr()?;
@@ -309,6 +345,46 @@ impl Parser {
         };
         let end = els.as_ref().map_or(then.span, |b| b.span);
         Ok(Expr { kind: ExprKind::If(Box::new(cond), then, els), span: start.to(end) })
+    }
+}
+
+/// Desugar `lhs |> f(a, b)` into `f(lhs, a, b)`, and `lhs |> f` into `f(lhs)`.
+fn pipe(lhs: Expr, rhs: Expr) -> PResult<Expr> {
+    let span = lhs.span.to(rhs.span);
+    let first = Arg { name: None, span: lhs.span, value: lhs };
+    let (name, mut args) = match rhs.kind {
+        ExprKind::Call(name, args) => (name, args),
+        ExprKind::Var(name) => (name, vec![]),
+        _ => {
+            return Err(ParseError {
+                message: "the right side of `|>` must be a function name or call".into(),
+                span: rhs.span,
+            })
+        }
+    };
+    args.insert(0, first);
+    Ok(Expr { kind: ExprKind::Call(name, args), span })
+}
+
+/// Parse the code inside `{...}` of an interpolated string.
+fn interp_part(part: StrPart) -> PResult<InterpPart> {
+    match part {
+        StrPart::Lit(s) => Ok(InterpPart::Lit(s)),
+        StrPart::Code(code, offset) => {
+            let mut tokens = lex(&code).map_err(|mut e| {
+                e.span = Span::new(e.span.start + offset, e.span.end + offset);
+                ParseError::from(e)
+            })?;
+            for t in &mut tokens {
+                t.span = Span::new(t.span.start + offset, t.span.end + offset);
+            }
+            let mut p = Parser { tokens, pos: 0 };
+            let e = p.expr()?;
+            if !p.at(&T::Eof) {
+                return p.error("`}` to end the interpolation");
+            }
+            Ok(InterpPart::Expr(e))
+        }
     }
 }
 
@@ -353,6 +429,36 @@ mod tests {
     fn else_if_chain() {
         let src = "fn f(x: i64) -> i64 { if x < 0 { 0 } else if x < 10 { 1 } else { 2 } }";
         assert!(parse(src).is_ok());
+    }
+
+    #[test]
+    fn pipeline_desugars_to_calls() {
+        let p = parse("fn main() { 5 |> double |> add(1) }").unwrap();
+        let tail = p.functions[0].body.tail.as_ref().unwrap();
+        let ExprKind::Call(name, args) = &tail.kind else { panic!() };
+        assert_eq!(name, "add");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].value.kind, ExprKind::Call(n, a) if n == "double" && a.len() == 1));
+        assert!(parse("fn main() { 1 |> 2 }").is_err());
+    }
+
+    #[test]
+    fn named_and_default_arguments() {
+        let p = parse("fn f(a: i64, b: i64 = 2) {} fn main() { f(1, b: 3) }").unwrap();
+        assert!(p.functions[0].params[1].default.is_some());
+        let ExprKind::Call(_, args) = &p.functions[1].body.tail.as_ref().unwrap().kind else { panic!() };
+        assert_eq!(args[1].name.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn interpolation_and_defer() {
+        let p = parse(r#"fn main() { defer print("bye") print("x = {x + 1}") }"#).unwrap();
+        let body = &p.functions[0].body;
+        assert!(matches!(body.stmts[0], Stmt::Defer { .. }));
+        let ExprKind::Call(_, args) = &body.tail.as_ref().unwrap().kind else { panic!() };
+        let ExprKind::Interp(parts) = &args[0].value.kind else { panic!() };
+        let InterpPart::Expr(e) = &parts[1] else { panic!() };
+        assert_eq!(e.span.start, 43, "spans inside interpolation point at the original source");
     }
 
     #[test]

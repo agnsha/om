@@ -1,0 +1,41 @@
+// Features Om borrows from other languages that Rust does not have.
+
+// Default and named arguments (Python, Kotlin, Swift).
+fn area(width: i64, height: i64 = 1, scale: i64 = 1) -> i64 {
+    width * height * scale
+}
+
+fn double(x: i64) -> i64 { x * 2 }
+fn add(x: i64, y: i64) -> i64 { x + y }
+fn square(x: i64) -> i64 { x * x }
+
+// defer (Zig, Go, Swift): runs when the block exits, newest first, even on early return.
+fn process(n: i64) -> i64 {
+    print("open {n}")
+    defer print("close {n}")
+    if n < 0 {
+        return 0
+    }
+    defer print("  finished work on {n}")
+    n * 10
+}
+
+fn main() {
+    print(area(5))
+    print(area(5, 2))
+    print(area(5, scale: 3))
+    print(area(height: 4, width: 2))
+
+    // Pipeline operator (Elixir, F#, Gleam): x |> f(y) means f(x, y).
+    let result = 3 |> double |> add(4) |> square
+    print(result)
+
+    // String interpolation (Python f-strings, Kotlin, Swift).
+    let name = "Om"
+    let version = 1
+    print("Hello from {name} v0.{version}! 6 * 7 = {6 * 7}, ready: {version > 0}")
+    print("braces are written {{like this}}")
+
+    print(process(4))
+    print(process(-1))
+}

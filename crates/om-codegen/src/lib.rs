@@ -6,7 +6,7 @@
 //!
 //! Om functions are emitted as `om_<name>`. The Om `main` becomes the C
 //! `main` symbol, so the object file links with the system C compiler and
-//! uses libc's `printf` and `puts` for output.
+//! uses a two-function C runtime (`RUNTIME_C`) for output.
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{types, AbiParam, Block as ClBlock, InstBuilder, Signature, Value};
@@ -85,7 +85,21 @@ impl Ty {
 struct FnInfo {
     id: FuncId,
     params: Vec<Ty>,
+    param_names: Vec<String>,
+    /// Constant default value for each parameter, if it has one.
+    defaults: Vec<Option<Expr>>,
     ret: Ty,
+}
+
+/// The type of a constant default value, or `None` if the expression is not a constant.
+fn const_type(e: &Expr) -> Option<Ty> {
+    match &e.kind {
+        ExprKind::Int(_) => Some(Ty::I64),
+        ExprKind::Bool(_) => Some(Ty::Bool),
+        ExprKind::Str(_) => Some(Ty::Str),
+        ExprKind::Unary(UnOp::Neg, inner) if matches!(inner.kind, ExprKind::Int(_)) => Some(Ty::I64),
+        _ => None,
+    }
 }
 
 /// Type-check `program` and compile it to a native object file for the host machine.
@@ -171,7 +185,28 @@ impl Codegen {
             .module
             .declare_function(&Self::symbol(&f.name), Linkage::Export, &sig)
             .map_err(|e| CompileError { message: e.to_string(), span: f.span })?;
-        self.fns.insert(f.name.clone(), FnInfo { id, params, ret });
+        let mut seen_default = false;
+        for (p, ty) in f.params.iter().zip(&params) {
+            match &p.default {
+                Some(d) => {
+                    seen_default = true;
+                    match const_type(d) {
+                        Some(t) if t == *ty => {}
+                        Some(t) => {
+                            return err(format!("default for `{}` is {t}, but the parameter is {ty}", p.name), d.span)
+                        }
+                        None => return err("default values must be constants (a number, bool or string)", d.span),
+                    }
+                }
+                None if seen_default => {
+                    return err(format!("`{}` needs a default because an earlier parameter has one", p.name), p.span)
+                }
+                None => {}
+            }
+        }
+        let param_names = f.params.iter().map(|p| p.name.clone()).collect();
+        let defaults = f.params.iter().map(|p| p.default.clone()).collect();
+        self.fns.insert(f.name.clone(), FnInfo { id, params, param_names, defaults, ret });
         Ok(())
     }
 
@@ -188,7 +223,8 @@ impl Codegen {
         b.switch_to_block(entry);
         b.seal_block(entry);
 
-        let mut lw = Lower { cg: self, b, scopes: vec![HashMap::new()], ret, is_main, dead: false };
+        let mut lw =
+            Lower { cg: self, b, scopes: vec![HashMap::new()], defers: vec![vec![]], ret, is_main, dead: false };
         for (i, p) in f.params.iter().enumerate() {
             let val = lw.b.block_params(entry)[i];
             let var = lw.b.declare_var(params[i].cl().unwrap());
@@ -259,6 +295,8 @@ struct Lower<'a> {
     cg: &'a mut Codegen,
     b: FunctionBuilder<'a>,
     scopes: Vec<HashMap<String, Local>>,
+    /// Deferred expressions for each open scope, run in reverse when the scope exits.
+    defers: Vec<Vec<Expr>>,
     ret: Ty,
     is_main: bool,
     /// True after a `return`: code that follows is unreachable.
@@ -302,8 +340,43 @@ impl<'a> Lower<'a> {
 
     fn block(&mut self, blk: &Block) -> CResult<(Option<Value>, Ty)> {
         self.scopes.push(HashMap::new());
-        let result = self.block_inner(blk);
+        self.defers.push(Vec::new());
+        let mut result = self.block_inner(blk);
+        if result.is_ok() && !self.dead {
+            let level = self.scopes.len() - 1;
+            if let Err(e) = self.run_defers(level) {
+                result = Err(e);
+            }
+        }
+        self.defers.pop();
         self.scopes.pop();
+        result
+    }
+
+    /// Emit the deferred expressions of scope `level`, newest first. Each one sees
+    /// only the variables that were visible at that scope, not inner ones.
+    fn run_defers(&mut self, level: usize) -> CResult<()> {
+        if self.defers[level].is_empty() {
+            return Ok(());
+        }
+        // Take this level's defers while they run, so a deferred expression can never re-run itself.
+        let taken = std::mem::take(&mut self.defers[level]);
+        let pending: Vec<Expr> = taken.iter().rev().cloned().collect();
+        let inner_scopes = self.scopes.split_off(level + 1);
+        let inner_defers = self.defers.split_off(level + 1);
+        let mut result = Ok(());
+        for e in &pending {
+            result = self.expr(e).map(|_| ());
+            if result.is_ok() && self.dead {
+                result = err("`return` is not allowed inside `defer`", e.span);
+            }
+            if result.is_err() {
+                break;
+            }
+        }
+        self.defers[level] = taken;
+        self.scopes.extend(inner_scopes);
+        self.defers.extend(inner_defers);
         result
     }
 
@@ -380,9 +453,16 @@ impl<'a> Lower<'a> {
                     return err(format!("this function returns {}, but `return` gives {ty}", self.ret), *span);
                 }
                 if !self.dead {
+                    for level in (0..self.scopes.len()).rev() {
+                        self.run_defers(level)?;
+                    }
                     self.emit_return(val);
                 }
                 self.start_dead_block();
+                Ok(())
+            }
+            Stmt::Defer { body, .. } => {
+                self.defers.last_mut().unwrap().push(body.clone());
                 Ok(())
             }
             Stmt::Expr(e) => self.expr(e).map(|_| ()),
@@ -446,6 +526,10 @@ impl<'a> Lower<'a> {
                 Ok((Some(out.0), out.1))
             }
             ExprKind::Call(name, args) => self.call(name, args, e.span),
+            ExprKind::Interp(_) => err(
+                "string interpolation can only be used inside `print` for now (runtime strings arrive in phase 4)",
+                e.span,
+            ),
             ExprKind::If(cond, then, els) => self.if_expr(cond, then, els.as_ref(), e.span),
             ExprKind::Block(b) => self.block(b),
         }
@@ -535,7 +619,7 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Expr], span: Span) -> CResult<(Option<Value>, Ty)> {
+    fn call(&mut self, name: &str, args: &[Arg], span: Span) -> CResult<(Option<Value>, Ty)> {
         if name == "print" {
             return self.print(args, span);
         }
@@ -546,42 +630,106 @@ impl<'a> Lower<'a> {
             return err("`main` cannot be called", span);
         }
         let (id, params, ret) = (info.id, info.params.clone(), info.ret);
-        if args.len() != params.len() {
-            return err(format!("`{name}` takes {} argument(s) but {} were given", params.len(), args.len()), span);
-        }
-        let mut vals = Vec::new();
-        for (a, want) in args.iter().zip(&params) {
-            let (v, t) = self.expr(a)?;
-            if t != *want {
-                return err(format!("expected {want}, found {t}"), a.span);
+        let (names, defaults) = (info.param_names.clone(), info.defaults.clone());
+
+        // Match arguments to parameter slots: positional first, then by name.
+        let mut filled = vec![false; params.len()];
+        let mut arg_slot = Vec::with_capacity(args.len());
+        let mut seen_named = false;
+        for (i, a) in args.iter().enumerate() {
+            let slot = match &a.name {
+                None if seen_named => return err("positional arguments must come before named ones", a.span),
+                None if i >= params.len() => {
+                    return err(
+                        format!("`{name}` takes {} argument(s) but {} were given", params.len(), args.len()),
+                        span,
+                    )
+                }
+                None => i,
+                Some(n) => {
+                    seen_named = true;
+                    match names.iter().position(|p| p == n) {
+                        Some(k) => k,
+                        None => return err(format!("`{name}` has no parameter named `{n}`"), a.span),
+                    }
+                }
+            };
+            if filled[slot] {
+                return err(format!("argument `{}` is given twice", names[slot]), a.span);
             }
-            vals.push(v.unwrap());
+            filled[slot] = true;
+            arg_slot.push(slot);
         }
+
+        // Evaluate the written arguments in source order, then fill in defaults.
+        let mut vals: Vec<Option<Value>> = vec![None; params.len()];
+        for (a, &k) in args.iter().zip(&arg_slot) {
+            let (v, t) = self.expr(&a.value)?;
+            if t != params[k] {
+                return err(format!("argument `{}` should be {}, found {t}", names[k], params[k]), a.value.span);
+            }
+            vals[k] = v;
+        }
+        for k in 0..params.len() {
+            if vals[k].is_none() {
+                let Some(d) = &defaults[k] else {
+                    return err(format!("missing argument `{}` in call to `{name}`", names[k]), span);
+                };
+                vals[k] = self.expr(d)?.0;
+            }
+        }
+        let vals: Vec<Value> = vals.into_iter().map(Option::unwrap).collect();
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
         let call = self.b.ins().call(fref, &vals);
         let v = self.b.inst_results(call).first().copied();
         Ok((v, ret))
     }
 
-    /// `print(x)` writes an i64, bool or str followed by a newline.
-    fn print(&mut self, args: &[Expr], span: Span) -> CResult<(Option<Value>, Ty)> {
+    /// `print(x)` writes an i64, bool or str, or an interpolated string, followed by a newline.
+    fn print(&mut self, args: &[Arg], span: Span) -> CResult<(Option<Value>, Ty)> {
         let [arg] = args else {
             return err("`print` takes exactly one argument", span);
         };
-        let (v, ty) = self.expr(arg)?;
-        let ptr = types::I64;
+        if arg.name.is_some() {
+            return err("`print` does not take named arguments", arg.span);
+        }
+        match &arg.value.kind {
+            ExprKind::Interp(parts) => {
+                for part in parts {
+                    match part {
+                        InterpPart::Lit(text) => {
+                            let s = self.str_ptr(text)?;
+                            self.rt_call("om_rt_write_str", s)?;
+                        }
+                        InterpPart::Expr(e) => self.write_value(e)?,
+                    }
+                }
+                let nl = self.str_ptr("\n")?;
+                self.rt_call("om_rt_write_str", nl)?;
+            }
+            _ => {
+                self.write_value(&arg.value)?;
+                let nl = self.str_ptr("\n")?;
+                self.rt_call("om_rt_write_str", nl)?;
+            }
+        }
+        Ok((None, Ty::Unit))
+    }
+
+    /// Write one value to stdout with no newline.
+    fn write_value(&mut self, e: &Expr) -> CResult<()> {
+        let (v, ty) = self.expr(e)?;
         match ty {
-            Ty::I64 => self.call_print_i64(v.unwrap())?,
+            Ty::I64 => self.rt_call("om_rt_write_i64", v.unwrap()),
             Ty::Bool => {
                 let t = self.str_ptr("true")?;
                 let f = self.str_ptr("false")?;
                 let s = self.b.ins().select(v.unwrap(), t, f);
-                self.call_puts(s, ptr)?;
+                self.rt_call("om_rt_write_str", s)
             }
-            Ty::Str => self.call_puts(v.unwrap(), ptr)?,
-            _ => return err(format!("cannot print a {ty} value"), arg.span),
+            Ty::Str => self.rt_call("om_rt_write_str", v.unwrap()),
+            _ => err(format!("cannot print a {ty} value"), e.span),
         }
-        Ok((None, Ty::Unit))
     }
 
     fn str_ptr(&mut self, s: &str) -> CResult<Value> {
@@ -590,25 +738,19 @@ impl<'a> Lower<'a> {
         Ok(self.b.ins().symbol_value(types::I64, gv))
     }
 
-    fn call_puts(&mut self, s: Value, ptr: types::Type) -> CResult<()> {
-        let id = self.cg.libc("puts", &[ptr], types::I32)?;
+    /// Call a one-argument function from the C runtime. Cranelift cannot call variadic
+    /// functions like `printf` portably (Apple ARM64 passes variadic arguments on the
+    /// stack), so output goes through small non-variadic shims.
+    fn rt_call(&mut self, name: &str, arg: Value) -> CResult<()> {
+        let id = self.cg.libc(name, &[types::I64], types::I32)?;
         let f = self.cg.module.declare_func_in_func(id, self.b.func);
-        self.b.ins().call(f, &[s]);
-        Ok(())
-    }
-
-    fn call_print_i64(&mut self, n: Value) -> CResult<()> {
-        // Cranelift cannot call variadic functions like printf portably (Apple ARM64
-        // passes variadic arguments on the stack), so integers go through a small
-        // non-variadic shim in the runtime that `omc` links into every program.
-        let id = self.cg.libc("om_rt_print_i64", &[types::I64], types::I32)?;
-        let f = self.cg.module.declare_func_in_func(id, self.b.func);
-        self.b.ins().call(f, &[n]);
+        self.b.ins().call(f, &[arg]);
         Ok(())
     }
 }
 
 /// The C runtime linked into every Om program. Kept tiny: phase 4 replaces it with `om-std`.
 pub const RUNTIME_C: &str = r#"#include <stdio.h>
-int om_rt_print_i64(long long n) { return printf("%lld\n", n); }
+int om_rt_write_i64(long long n) { return printf("%lld", n); }
+int om_rt_write_str(const char *s) { return fputs(s, stdout); }
 "#;

@@ -84,6 +84,32 @@ error: cannot assign twice to `x`; declare it with `let mut x`
   |     ^^^^^
 ```
 
+## Features Rust doesn't have
+
+Om borrows popular features from other languages that Rust users keep asking for. All four work today:
+
+```om
+// Default and named arguments (Python, Kotlin, Swift). Requested for Rust since 2014 (rust-lang/rfcs#323).
+fn area(width: i64, height: i64 = 1, scale: i64 = 1) -> i64 { width * height * scale }
+area(5, scale: 3)
+
+// Pipeline operator (Elixir, F#, Gleam). x |> f(y) means f(x, y).
+let result = 3 |> double |> add(4) |> square
+
+// String interpolation with any expression (Python f-strings, Kotlin, Swift).
+print("6 * 7 = {6 * 7}, fib = {fib(10)}")
+
+// defer (Zig, Go, Swift): cleanup that runs when the block exits, even on early return.
+fn process(n: i64) -> i64 {
+    print("open {n}")
+    defer print("close {n}")
+    if n < 0 { return 0 }
+    n * 10
+}
+```
+
+See [`examples/modern.om`](examples/modern.om) and the [language reference](docs/language.md).
+
 ## The language today (phase 0)
 
 - Types: `i64`, `bool`, `str` (string literals)
@@ -92,7 +118,8 @@ error: cannot assign twice to `x`; declare it with `let mut x`
 - `if` / `else if` / `else` as expressions, `while`, `return`
 - Operators: `+ - * / %`, `== != < <= > >=`, `&& || !` (short-circuit)
 - Blocks are expressions; semicolons are optional
-- `print(x)` for integers, booleans and strings
+- `print(x)` for integers, booleans, strings and interpolated strings
+- Default and named arguments, the `|>` pipeline operator, string interpolation and `defer`
 - `fn main() -> i64` returns the process exit code
 
 See the [language reference](docs/language.md) and the [`examples/`](examples) folder.
@@ -119,6 +146,7 @@ The compiler is written in Rust and split into small crates. See
 | Phase | Focus | Status |
 |---|---|---|
 | 0 | Lexer, parser, native backend, CLI, tests, CI | ✅ done |
+| 0.5 | Default and named arguments, `\|>`, string interpolation, `defer` | ✅ done |
 | 1 | Core language: more integer types, `for` loops, better errors, `om-check` crate | next |
 | 2 | Structs, move semantics, scoped borrows, ownership checker | planned |
 | 3 | Enums, pattern matching, generics, interfaces, `Result` and `?` | planned |
