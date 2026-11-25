@@ -90,8 +90,9 @@ codes while your program runs, and puts it back afterwards.
 | `cargo : The term 'cargo' is not recognized` | Rust is not installed, or PowerShell was open while you installed it. Do step 2b, then open a new PowerShell window. |
 | `om : The term 'om' is not recognized` | `om` is not installed or not on PATH. Do step 2a or 2b, then open a new PowerShell window. |
 | `error: no C compiler found` or `could not run the C compiler` | The Build Tools are missing. Do step 1. |
-| `error: could not find Cargo.toml` | Run `cargo install --path crates/omc` from inside the `om` folder (`cd $HOME\om`). |
 | `linker 'link.exe' not found` while running `cargo install` | Same as above: Rust needs the Build Tools too. Do step 1. |
+| `link: extra operand ...` and `Try 'link --help'` while running `cargo install` | Rust could not find the Build Tools, so it ran Git's unrelated `link` command instead. Do step 1, open a new PowerShell, and run `cargo install` again. If it still fails, see [Git's `link.exe`](#gits-linkexe) below. |
+| `error: could not find Cargo.toml` or `--path must point to a directory` | You are not in the `om` folder. `cd` into the folder you cloned (for example `cd C:\om-src`) and run the command again. |
 | Strange symbols like `←[31m` instead of colours | You are on an old Windows 10 build. Use [Windows Terminal](https://aka.ms/terminal). |
 
 ## Other C compilers
@@ -104,3 +105,22 @@ from MinGW-w64 or LLVM). To pick one yourself, set `CC`:
 $env:CC = "clang"
 om run examples/hello.om
 ```
+
+## Git's `link.exe`
+
+Git for Windows comes with Linux tools, and one of them is also called
+`link.exe`. When the Build Tools are missing, Rust falls back to whatever
+`link.exe` is on your PATH, finds Git's, and fails with `link: extra operand`.
+
+1. Install the Build Tools (step 1). This is almost always the whole fix.
+2. If it still fails, run the install from a **Developer PowerShell**, which
+   puts Microsoft's linker first on PATH. Open the Start menu, search for
+   **Developer PowerShell for VS 2022**, open it, then:
+
+   ```powershell
+   cd C:\om-src     # the folder you cloned Om into
+   cargo install --path crates/omc
+   ```
+
+After `om` is installed, any PowerShell window works. `om` finds Microsoft's
+compiler and linker by itself and never uses Git's `link.exe`.

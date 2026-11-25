@@ -105,7 +105,24 @@ fn find_tool() -> Result<Tool, String> {
 fn find_msvc() -> Option<Tool> {
     let target = if cfg!(target_arch = "aarch64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" };
     let found = cc::windows_registry::find_tool(target, "cl.exe")?;
-    let env = found.get_envs().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+    let mut env: Vec<(OsString, OsString)> = found.get_envs().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+    // cl.exe runs `link.exe` from PATH. Git for Windows ships an unrelated
+    // `link.exe` (coreutils) that can come first, so put the MSVC directory,
+    // which holds the real linker next to cl.exe, at the front.
+    if let Some(dir) = found.path().parent() {
+        let current = env
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
+        let paths = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&current));
+        if let Ok(joined) = std::env::join_paths(paths) {
+            env.retain(|(k, _)| !k.eq_ignore_ascii_case("PATH"));
+            env.push(("PATH".into(), joined));
+        }
+    }
     Some(Tool { name: "cl.exe".into(), path: found.path().to_path_buf(), env, msvc: true })
 }
 
