@@ -81,7 +81,7 @@ fn cmd_run(args: &[String]) -> i32 {
         eprint!("{USAGE}");
         return 2;
     };
-    let out = std::env::temp_dir().join(format!("om-run-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("om-run-{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     if let Err(c) = build_to(input, &out) {
         return c;
     }
@@ -89,6 +89,11 @@ fn cmd_run(args: &[String]) -> i32 {
     let _ = std::fs::remove_file(&out);
     match status {
         Ok(s) => match s.code() {
+            // Windows reports crashes as exception codes such as 0xC0000005.
+            Some(c) if cfg!(windows) && (c as u32) >= 0xC000_0000 => {
+                eprintln!("error: the program crashed ({})", windows_exception(c as u32));
+                1
+            }
             Some(c) => c,
             None => {
                 #[cfg(unix)]
@@ -107,6 +112,19 @@ fn cmd_run(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn windows_exception(code: u32) -> String {
+    let what = match code {
+        0xC000_0005 => "access violation",
+        0xC000_00FD => "stack overflow",
+        0xC000_0094 => "integer division by zero",
+        0xC000_0095 => "integer overflow",
+        0xC000_001D => "illegal instruction",
+        0xC000_013A => "stopped with Ctrl+C",
+        _ => "exception",
+    };
+    format!("{what}, code {code:#010X}")
 }
 
 fn cmd_check(args: &[String]) -> i32 {

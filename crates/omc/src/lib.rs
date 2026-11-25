@@ -1,8 +1,9 @@
 //! The Om compiler driver: parse, check, generate an object file, and link.
 
+pub mod link;
+
 use om_lexer::Span;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 /// A compiler error with its location, ready to print.
 #[derive(Debug)]
@@ -48,32 +49,7 @@ pub fn compile(src: &str) -> Result<Vec<u8>, Diagnostic> {
 /// Compile `src` and link it into a native executable at `out`.
 pub fn build(src: &str, out: &Path) -> Result<(), Diagnostic> {
     let object = compile(src)?;
-    let dir = scratch_dir()?;
-    let obj_path = dir.join("program.o");
-    let rt_path = dir.join("om_runtime.c");
-    std::fs::write(&obj_path, object).map_err(|e| Diagnostic::plain(format!("writing object file: {e}")))?;
-    std::fs::write(&rt_path, om_codegen::RUNTIME_C).map_err(|e| Diagnostic::plain(format!("writing runtime: {e}")))?;
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    let status =
-        Command::new(&cc).arg(&obj_path).arg(&rt_path).arg("-O2").arg("-lm").arg("-o").arg(out).status().map_err(
-            |e| {
-                Diagnostic::plain(format!(
-                    "could not run the linker `{cc}`: {e}. Install a C compiler (cc, gcc or clang)."
-                ))
-            },
-        )?;
-    let _ = std::fs::remove_dir_all(&dir);
-    if !status.success() {
-        return Err(Diagnostic::plain(format!("linking failed ({status})")));
-    }
-    Ok(())
-}
-
-fn scratch_dir() -> Result<PathBuf, Diagnostic> {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("om-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| Diagnostic::plain(format!("creating temp dir: {e}")))?;
-    Ok(dir)
+    link::link(&object, out).map_err(Diagnostic::plain)
 }
 
 #[cfg(test)]

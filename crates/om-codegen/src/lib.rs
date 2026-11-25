@@ -404,15 +404,26 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
     all.traits.extend(program.traits.iter().cloned());
     let program = &all;
 
+    // `OM_TARGET` (a target triple such as `x86_64-pc-windows-msvc`) cross-compiles
+    // the object file; by default it targets the machine running the compiler.
+    let isa_builder = match std::env::var("OM_TARGET") {
+        Ok(t) if !t.is_empty() => cranelift_codegen::isa::lookup_by_name(&t)
+            .map_err(|e| internal(format!("unsupported target `{t}`: {e}")))?,
+        _ => cranelift_native::builder().map_err(|e| internal(format!("unsupported host: {e}")))?,
+    };
+    let windows = isa_builder.triple().operating_system == target_lexicon::OperatingSystem::Windows;
     let mut flags = settings::builder();
     flags.set("opt_level", "speed").map_err(internal)?;
-    flags.set("is_pic", "true").map_err(internal)?;
+    // COFF has no GOT, so Windows code uses absolute addresses that the linker relocates.
+    flags.set("is_pic", if windows { "false" } else { "true" }).map_err(internal)?;
+    if windows {
+        // Windows grows the stack one guard page at a time: big frames must touch each page.
+        flags.set("enable_probestack", "true").map_err(internal)?;
+        flags.set("probestack_strategy", "inline").map_err(internal)?;
+    }
     // Structs returned from functions can need more return registers than the ABI has.
     flags.set("enable_multi_ret_implicit_sret", "true").map_err(internal)?;
-    let isa = cranelift_native::builder()
-        .map_err(|e| internal(format!("unsupported host: {e}")))?
-        .finish(settings::Flags::new(flags))
-        .map_err(internal)?;
+    let isa = isa_builder.finish(settings::Flags::new(flags)).map_err(internal)?;
     let builder = ObjectBuilder::new(isa, "om", cranelift_module::default_libcall_names()).map_err(internal)?;
     let mut cg = Codegen {
         module: ObjectModule::new(builder),
@@ -4878,7 +4889,23 @@ fn has_bindings(p: &Pattern) -> bool {
 }
 
 /// The C runtime linked into every Om program. Kept tiny: the standard library replaces it later.
-pub const RUNTIME_C: &str = r#"#include <math.h>
+pub const RUNTIME_C: &str = r#"#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <conio.h>
+#include <fcntl.h>
+#include <io.h>
+#else
+#include <poll.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+#endif
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4897,13 +4924,39 @@ double om_rt_math_powf(double x, double y) { return pow(x, y); }
 double om_rt_math_atan2(double y, double x) { return atan2(y, x); }
 double om_rt_math_hypot(double x, double y) { return hypot(x, y); }
 double om_rt_math_fmod(double x, double y) { return fmod(x, y); }
+static void om_oom(void) { fputs("out of memory\n", stderr); exit(134); }
+/* All output goes through emit(): to stderr (err = 1), to the String being
+   built by `"{x}"` formatting, or to stdout. Strings are built in a growable
+   buffer, so no FILE tricks (open_memstream) are needed and it works everywhere. */
+typedef struct { char *buf; size_t len, cap; } om_buf_;
+static om_buf_ om_caps[256];
+static int om_ncaps;
+static long long om_last_len;
+static void om_buf_push(om_buf_ *b, const char *s, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 64;
+        while (cap < b->len + n + 1) cap *= 2;
+        char *p = (char *)realloc(b->buf, cap);
+        if (!p) om_oom();
+        b->buf = p; b->cap = cap;
+    }
+    if (n) memcpy(b->buf + b->len, s, n);
+    b->len += n;
+    b->buf[b->len] = 0;
+}
+static int emit(int err, const char *s, size_t n) {
+    if (err) fwrite(s, 1, n, stderr);
+    else if (om_ncaps) om_buf_push(&om_caps[om_ncaps - 1], s, n);
+    else fwrite(s, 1, n, stdout);
+    return (int)n;
+}
+static int emit_str(int err, const char *s) { return emit(err, s, strlen(s)); }
 /* Format a float like Rust: `{}` (Display) never uses an exponent and prints
    4.0 as "4"; `{:?}` (Debug) prints "4.0" and switches to "1e16" / "1e-5" for
    very large or small values. `digits` is 17 for f64 and 9 for f32. */
-static int write_float(FILE *out, double x, int is_f32, int debug) {
-    if (x != x) return fputs("NaN", out);
-    if (x == 1.0 / 0.0) return fputs("inf", out);
-    if (x == -1.0 / 0.0) return fputs("-inf", out);
+static int write_float(int err, double x, int is_f32, int debug) {
+    if (isnan(x)) return emit_str(err, "NaN");
+    if (isinf(x)) return emit_str(err, x > 0 ? "inf" : "-inf");
     char e[40];
     int maxp = is_f32 ? 9 : 17;
     for (int p = 1; p <= maxp; p++) {
@@ -4934,12 +4987,9 @@ static int write_float(FILE *out, double x, int is_f32, int debug) {
         for (int j = 0; j < -exp - 1; j++) buf[k++] = '0';
         for (int j = 0; j < nd; j++) buf[k++] = digits[j];
     }
-    buf[k] = 0;
-    return fputs(buf, out);
+    return emit(err, buf, (size_t)k);
 }
-static int write_f64(FILE *out, double x) { return write_float(out, x, 0, 0); }
-static int write_f32(FILE *out, float x) { return write_float(out, x, 1, 0); }
-static int write_char(FILE *out, unsigned c) {
+static int write_char(int err, unsigned c) {
     /* UTF-8 encode one Unicode scalar value. */
     char b[4];
     int n;
@@ -4951,28 +5001,23 @@ static int write_char(FILE *out, unsigned c) {
         b[0] = (char)(0xF0 | (c >> 18)); b[1] = (char)(0x80 | ((c >> 12) & 0x3F));
         b[2] = (char)(0x80 | ((c >> 6) & 0x3F)); b[3] = (char)(0x80 | (c & 0x3F)); n = 4;
     }
-    return (int)fwrite(b, 1, (size_t)n, out);
+    return emit(err, b, (size_t)n);
 }
-/* Output goes to stdout, or to an in-memory buffer while building a String. */
-static FILE *om_out_;
-static FILE *om_out(void) { return om_out_ ? om_out_ : stdout; }
-static struct { FILE *f; char *buf; size_t len; FILE *prev; } om_caps[256];
-static int om_ncaps;
-static long long om_last_len;
+static int write_i64(int err, long long n) { char b[24]; return emit(err, b, (size_t)snprintf(b, sizeof b, "%lld", n)); }
+static int write_u64(int err, unsigned long long n) {
+    char b[24];
+    return emit(err, b, (size_t)snprintf(b, sizeof b, "%llu", n));
+}
 void om_rt_capture_begin(void) {
     if (om_ncaps == 256) { fputs("string formatting nested too deeply\n", stderr); exit(134); }
-    int k = om_ncaps++;
-    om_caps[k].buf = NULL; om_caps[k].len = 0; om_caps[k].prev = om_out_;
-    om_caps[k].f = open_memstream(&om_caps[k].buf, &om_caps[k].len);
-    if (!om_caps[k].f) { fputs("out of memory\n", stderr); exit(134); }
-    om_out_ = om_caps[k].f;
+    om_buf_ empty = { NULL, 0, 0 };
+    om_caps[om_ncaps++] = empty;
 }
 char *om_rt_capture_end(void) {
-    int k = --om_ncaps;
-    fclose(om_caps[k].f);
-    om_out_ = om_caps[k].prev;
-    om_last_len = (long long)om_caps[k].len;
-    return om_caps[k].buf;
+    om_buf_ *b = &om_caps[--om_ncaps];
+    if (!b->buf) om_buf_push(b, "", 0);
+    om_last_len = (long long)b->len;
+    return b->buf;
 }
 long long om_rt_capture_len(void) { return om_last_len; }
 static char om_parse_ok_;
@@ -4993,32 +5038,32 @@ double om_rt_parse_f64(const char *s, long long n) {
     return x;
 }
 char om_rt_parse_ok(void) { return om_parse_ok_; }
-int om_rt_write_i64(long long n) { return fprintf(om_out(), "%lld", n); }
-int om_rt_write_u64(unsigned long long n) { return fprintf(om_out(), "%llu", n); }
-int om_rt_write_f32(float x) { return write_f32(om_out(), x); }
-int om_rt_write_f32_dbg(float x) { return write_float(om_out(), x, 1, 1); }
-int om_rt_ewrite_f32_dbg(float x) { return write_float(stderr, x, 1, 1); }
-int om_rt_write_f64_dbg(double x) { return write_float(om_out(), x, 0, 1); }
-int om_rt_ewrite_f64_dbg(double x) { return write_float(stderr, x, 0, 1); }
-int om_rt_write_char(unsigned c) { return write_char(om_out(), c); }
-int om_rt_ewrite_u64(unsigned long long n) { return fprintf(stderr, "%llu", n); }
-int om_rt_ewrite_f32(float x) { return write_f32(stderr, x); }
-int om_rt_ewrite_char(unsigned c) { return write_char(stderr, c); }
-void om_rt_write_bytes(const char *s, long long n) { fwrite(s, 1, (size_t)n, om_out()); }
-int om_rt_write_f64(double x) { return write_f64(om_out(), x); }
-int om_rt_ewrite_i64(long long n) { return fprintf(stderr, "%lld", n); }
-void om_rt_ewrite_bytes(const char *s, long long n) { fwrite(s, 1, (size_t)n, stderr); }
-int om_rt_ewrite_f64(double x) { return write_f64(stderr, x); }
+int om_rt_write_i64(long long n) { return write_i64(0, n); }
+int om_rt_write_u64(unsigned long long n) { return write_u64(0, n); }
+int om_rt_write_f32(float x) { return write_float(0, x, 1, 0); }
+int om_rt_write_f32_dbg(float x) { return write_float(0, x, 1, 1); }
+int om_rt_ewrite_f32_dbg(float x) { return write_float(1, x, 1, 1); }
+int om_rt_write_f64_dbg(double x) { return write_float(0, x, 0, 1); }
+int om_rt_ewrite_f64_dbg(double x) { return write_float(1, x, 0, 1); }
+int om_rt_write_char(unsigned c) { return write_char(0, c); }
+int om_rt_ewrite_u64(unsigned long long n) { return write_u64(1, n); }
+int om_rt_ewrite_f32(float x) { return write_float(1, x, 1, 0); }
+int om_rt_ewrite_char(unsigned c) { return write_char(1, c); }
+void om_rt_write_bytes(const char *s, long long n) { if (n > 0) emit(0, s, (size_t)n); }
+int om_rt_write_f64(double x) { return write_float(0, x, 0, 0); }
+int om_rt_ewrite_i64(long long n) { return write_i64(1, n); }
+void om_rt_ewrite_bytes(const char *s, long long n) { if (n > 0) emit(1, s, (size_t)n); }
+int om_rt_ewrite_f64(double x) { return write_float(1, x, 0, 0); }
 int om_rt_exit_panic(void) { fflush(stdout); exit(101); }
 void om_rt_flush(void) { fflush(stdout); }
 void *om_rt_alloc(long long size) {
     void *p = malloc(size > 0 ? (size_t)size : 1);
-    if (!p) { fputs("out of memory\n", stderr); exit(134); }
+    if (!p) om_oom();
     return p;
 }
 void *om_rt_realloc(void *p, long long size) {
     p = realloc(p, size > 0 ? (size_t)size : 1);
-    if (!p) { fputs("out of memory\n", stderr); exit(134); }
+    if (!p) om_oom();
     return p;
 }
 void om_rt_free(void *p) { free(p); }
@@ -5026,35 +5071,61 @@ void om_rt_free(void *p) { free(p); }
    use (no echo, no line buffering) and restores the terminal at exit. Arrow keys
    come back as 1000 (up), 1001 (down), 1002 (right), 1003 (left); end of input is -1. */
 #ifdef _WIN32
-#include <conio.h>
-#include <windows.h>
-long long om_rt_read_key(void) {
-    static int init;
+/* Set up the Windows console before main runs: UTF-8 output, ANSI escape codes
+   (colours, cursor moves) and "\n" line endings like Rust. Restored at exit. */
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+static UINT om_saved_cp_;
+static DWORD om_saved_mode_[2];
+static int om_have_mode_[2];
+static void om_win_restore(void) {
     fflush(stdout);
-    if (!init) {
-        init = 1;
-        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD mode;
-        if (GetConsoleMode(h, &mode)) SetConsoleMode(h, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
+    fflush(stderr);
+    if (om_saved_cp_) SetConsoleOutputCP(om_saved_cp_);
+    if (om_have_mode_[0]) SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), om_saved_mode_[0]);
+    if (om_have_mode_[1]) SetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), om_saved_mode_[1]);
+}
+static void om_win_init(void) {
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    om_saved_cp_ = GetConsoleOutputCP();
+    if (om_saved_cp_) SetConsoleOutputCP(CP_UTF8);
+    HANDLE h[2] = { GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };
+    for (int i = 0; i < 2; i++) {
+        if (GetConsoleMode(h[i], &om_saved_mode_[i])) {
+            om_have_mode_[i] = 1;
+            SetConsoleMode(h[i], om_saved_mode_[i] | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
     }
+    atexit(om_win_restore);
+}
+#ifdef _MSC_VER
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) void (*om_win_init_ptr)(void) = om_win_init;
+#pragma comment(linker, "/include:om_win_init_ptr")
+#else
+__attribute__((constructor)) static void om_win_init_ctor(void) { om_win_init(); }
+#endif
+long long om_rt_read_key(void) {
+    fflush(stdout);
     if (!_isatty(_fileno(stdin))) { int c = getchar(); return c == EOF ? -1 : c; }
     int c = _getch();
     if (c == 0 || c == 0xE0) {
         switch (_getch()) { case 72: return 1000; case 80: return 1001; case 77: return 1002; case 75: return 1003; default: return 0; }
     }
+    if (c == 3) exit(130); /* Ctrl+C still ends the program, as on Linux and macOS. */
     return c == '\r' ? '\n' : c;
 }
 long long om_rt_time_ns(void) {
     FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    return (long long)((((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 100ULL);
+    GetSystemTimePreciseAsFileTime(&ft);
+    /* 100 ns ticks since 1601 -> nanoseconds since 1970. */
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (long long)(t - 116444736000000000ULL) * 100LL;
 }
 void om_rt_sleep_ms(long long ms) { fflush(stdout); if (ms > 0) Sleep((DWORD)ms); }
 #else
-#include <poll.h>
-#include <termios.h>
-#include <time.h>
-#include <unistd.h>
 static struct termios om_saved_tty_;
 static int om_tty_raw_;
 static void om_restore_tty(void) { if (om_tty_raw_) tcsetattr(0, TCSANOW, &om_saved_tty_); }

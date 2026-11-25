@@ -91,8 +91,11 @@ Read the full [design document](docs/design.md).
 
 ## Install
 
-You need [Rust](https://rustup.rs) (stable) and a C compiler (`cc`, `gcc` or
-`clang`) for linking. Om builds on Linux and macOS (x86-64 and ARM64).
+You need [Rust](https://rustup.rs) (stable) and a C compiler for linking:
+`cc`, `gcc` or `clang` on Linux and macOS (x86-64 and ARM64), or the Visual
+Studio Build Tools on Windows (x86-64). **On Windows, follow the
+[Windows guide](docs/windows.md)**: it works straight from PowerShell, no WSL
+needed, and covers a prebuilt `om.exe`.
 
 ```sh
 git clone https://github.com/agnsha/om

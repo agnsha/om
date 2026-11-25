@@ -5,6 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `.exe` on Windows, so the built program can be started.
+const EXE: &str = std::env::consts::EXE_SUFFIX;
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -13,7 +16,7 @@ fn build_and_run(src: &str, name: &str) -> String {
     // Tests run in parallel: give every build its own file.
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}-{n}", std::process::id()));
+    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}-{n}{EXE}", std::process::id()));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
     let out = Command::new(&exe).output().expect("run compiled program");
     let _ = std::fs::remove_file(&exe);
@@ -42,7 +45,7 @@ fn examples_produce_expected_output() {
 
 #[test]
 fn main_return_value_is_exit_code() {
-    let exe = std::env::temp_dir().join(format!("om-test-exit-{}", std::process::id()));
+    let exe = std::env::temp_dir().join(format!("om-test-exit-{}{EXE}", std::process::id()));
     omc::build("fn main() -> i64 { 3 + 4 }", &exe).unwrap();
     let status = Command::new(&exe).status().unwrap();
     let _ = std::fs::remove_file(&exe);
@@ -299,7 +302,7 @@ fn rejects_bad_programs() {
 fn run_status(src: &str, name: &str) -> (String, String, i32) {
     let dir = std::env::temp_dir().join(format!("om-e2e-status-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join(name);
+    let exe = dir.join(format!("{name}{EXE}"));
     omc::build(src, &exe).expect("build should succeed");
     let out = std::process::Command::new(&exe).output().unwrap();
     (
@@ -615,7 +618,7 @@ fn borrowed_list_loops_self_constructors_and_string_eq() {
 fn run_with_input(src: &str, name: &str, input: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
-    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}", std::process::id()));
+    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}{EXE}", std::process::id()));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
     let mut child =
         Command::new(&exe).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("run compiled program");

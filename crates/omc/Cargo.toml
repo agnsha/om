@@ -12,3 +12,7 @@ om-parser = { version = "0.1.0", path = "../om-parser" }
 [[bin]]
 name = "om"
 path = "src/main.rs"
+
+# Finds the Microsoft C compiler (cl.exe) and its INCLUDE/LIB paths on Windows.
+[target.'cfg(windows)'.dependencies]
+cc = "1"
