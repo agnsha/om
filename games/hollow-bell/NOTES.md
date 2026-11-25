@@ -47,6 +47,22 @@ section. Each entry says what happened, what it cost, and a suggested fix.
    printed once, which is the right thing for a game anyway, but a
    `write(x)` / `eprint` would help.
 
+9. **Constants cannot be used as `match` patterns** (`match t { T_WALL => ..`
+   is "this pattern matches `T_WALL`, but the value is i64"), and **unit-only
+   enums have no `==`** unless you write an `Eq` impl. Together these pushed
+   the game to plain `i64` tile and creature codes, and then to `match`
+   arms on bare numbers (`0 => "#", 1 => "."`), which are hard to read and
+   easy to get wrong. Either fix would make the code much clearer; a
+   built-in `==` for enums (like the built-in printing) is the cheapest.
+10. **No `eprint`/`dbg`.** To find out why a sleeping monk woke up I made a
+    copy of the game whose wake-up paths called `panic("woke by ...")`. A
+    `dbg(x)` that prints to stderr with the line number would have been a
+    one-line change.
+11. **One file per program.** With no modules the game is a single
+    2,400-line file. For an AI that edits by search-and-replace that is
+    workable, but every edit needs a unique anchor string, and splitting
+    rendering, AI and generation into files would make each read cheaper.
+
 ## Things that behaved differently from Rust (cost a compile round trip)
 
 1. **`for x in &v` (or over a `&Vec` parameter) yields values, not
@@ -62,6 +78,29 @@ section. Each entry says what happened, what it cost, and a suggested fix.
    `g.prompt = "text"` (a `String` field) needs `.to_string()`. An automatic
    `str` to `String` conversion where a `String` is expected would save many
    round trips.
+
+## Balance log (100-game autopilot benchmark)
+
+Each line is one change and what the benchmark said afterwards. The autopilot
+fights far more than a careful player needs to, so a low autopilot win rate is
+expected; the aim was "winnable, and deaths mostly from creatures the stealth
+rules are about".
+
+| Change | Autopilot wins | Main killers |
+|---|---|---|
+| First playable version (melee 1-3, OM 3 damage, breath 8) | 1 | shades 40, listeners 38 |
+| OM 4 damage, breath 10 and +1 per 3 turns, melee 2-4, shades sing every other turn, listener 11 HP | 59 | shades 24 |
+| The mountain groans every 150 turns on a level (wakes sleepers, sends a hunter), resting regains breath less fast, one more creature per level | 36 | shades 27, listeners 17 |
+| Herbs 0-2 per level instead of 1-3; the Keeper returns to its vigil after a lure | 19 | listeners 33, shades 22 |
+| Autopilot sneaks past listeners instead of fighting them | 16 | listeners 33, shades 28 |
+
+Hand playtests found: a random wake-up could rouse the monster you were
+sneaking up on (now creatures only wake at random when you cannot see them);
+sneak attacks did too little to matter (now triple damage, and a sleeping
+monk dies in one blow); the sidebar overflowed 80 columns once all ten
+syllables were known; long messages wrapped and scrolled the screen (now
+wrapped to the log area); the chant's own noise was heard before its damage
+landed, so killed creatures "stirred" first.
 
 ## What worked well
 

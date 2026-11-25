@@ -335,6 +335,9 @@ struct Game {
     log: Vec[String],
     msgs: i64,
     level_turn: i64,
+    vigil_x: i64,
+    vigil_y: i64,
+    roared: bool,
     prompt: String,
     over: bool,
     won: bool,
@@ -394,6 +397,9 @@ fn new_game(seed: u64) -> Game {
         log: Vec::new(),
         msgs: 0,
         level_turn: 0,
+        vigil_x: 0,
+        vigil_y: 0,
+        roared: false,
         prompt: String::new(),
         over: false,
         won: false,
@@ -652,6 +658,8 @@ impl Game {
                     self.mons[last].tx = kx
                     self.mons[last].ty = ky
                     self.mons[last].timer = 1000000
+                    self.vigil_x = kx
+                    self.vigil_y = ky
                     placed = true
                 }
             }
@@ -953,7 +961,7 @@ impl Game {
             self.mons[i].state = if m.kind == M_LISTENER || m.kind == M_KEEPER && from_player { ST_HUNT } else { ST_SEARCH }
             self.mons[i].tx = x
             self.mons[i].ty = y
-            self.mons[i].timer = if m.kind == M_KEEPER { 1000000 } else { 6 + self.rn(6) }
+            self.mons[i].timer = if m.kind == M_KEEPER { 12 } else { 6 + self.rn(6) }
         }
     }
 
@@ -1067,8 +1075,8 @@ impl Game {
         if (m.kind == M_RAT || m.kind == M_WISP || m.kind == M_SHADE) && m.hp * 3 <= m.maxhp {
             self.mons[i].state = ST_FLEE
         }
-        if m.kind == M_KEEPER && m.hp * 2 <= m.maxhp && m.timer > 0 {
-            self.mons[i].timer = 0
+        if m.kind == M_KEEPER && m.hp * 2 <= m.maxhp && !self.roared {
+            self.roared = true
             self.say("The Bell Keeper ROARS. Every sleeper in the deep hears it.")
             self.noise(m.x, m.y, 40, false)
         }
@@ -1622,6 +1630,14 @@ impl Game {
             if self.rn(400) == 0 && !self.vis[idx(m.x, m.y)] { self.mons[i].state = ST_WANDER }
             return
         }
+        if m.kind == M_KEEPER && m.state == ST_WANDER {
+            // The Keeper never wanders: it goes back to its vigil by the bell.
+            self.mons[i].state = ST_SEARCH
+            self.mons[i].tx = self.vigil_x
+            self.mons[i].ty = self.vigil_y
+            self.mons[i].timer = 1000000
+        }
+        let m = self.mons[i]
         let sees = self.sees_player(m)
         let dist = cheb(m.x, m.y, self.px, self.py)
         if sees && m.state != ST_FLEE {
@@ -1693,7 +1709,7 @@ impl Game {
         }
         if m.state == ST_SEARCH {
             if m.x == m.tx && m.y == m.ty || cheb(m.x, m.y, m.tx, m.ty) <= 1 && self.rn(2) == 0 {
-                if m.kind == M_KEEPER { return }
+                if m.kind == M_KEEPER && m.x == self.vigil_x && m.y == self.vigil_y { return }
                 self.mons[i].timer -= 1
                 if self.mons[i].timer <= 0 {
                     self.mons[i].state = ST_WANDER
@@ -1782,7 +1798,7 @@ impl Game {
         let mode = if self.sneaking { "{GREEN}SNEAK{RESET}" } else { "{DIM}walk{RESET}" }
         out.push("Noise {YELLOW}{nb}{RESET} {mode}")
         out.push("Herbs {self.herbs}  Incense {self.incense}")
-        out.push("Shards {self.shards}  Mantra {self.max_syllables()}")
+        out.push("Shards {self.shards}  Max syl {self.max_syllables()}")
         // Known syllables, wrapped to the panel width.
         for f in 0..2 {
             let mut line = if f == 0 { "{DIM}Forms{RESET} ".to_string() } else { "{DIM}Forces{RESET}".to_string() }
@@ -1936,8 +1952,9 @@ impl Game {
                 if !self.sneaking { return Act::ToggleSneak }
                 return self.bot_walk_to(m.x, m.y)
             }
-            if m.kind == M_LISTENER && m.state != ST_HUNT && d > 1 && self.known[S_LO as usize] && self.breath >= 2 && self.max_syllables() >= 2 {
-                // Throw a lure past it rather than fight it.
+            if m.kind == M_LISTENER && m.state != ST_HUNT && d > 1 {
+                // Blind and deadly: slip past it in silence rather than fight.
+                if !self.sneaking { return Act::ToggleSneak }
                 return self.bot_explore()
             }
             if d <= 8 && self.los(self.px, self.py, m.x, m.y) {
@@ -1949,7 +1966,7 @@ impl Game {
             if d <= 1 { return Act::Move(m.x - self.px, m.y - self.py) }
             if m.state == ST_HUNT { return Act::Rest }
         }
-        if self.sneaking { return Act::ToggleSneak }
+        if self.sneaking && foe < 0 { return Act::ToggleSneak }
         if self.hp * 10 < self.maxhp * 6 || self.breath * 2 < self.maxbreath { return Act::Rest }
         self.bot_explore()
     }
@@ -2161,7 +2178,13 @@ fn key_to_act(g: &mut Game, k: i64) -> Act {
     if k == 'q' as i64 { return Act::Herb }
     if k == 'e' as i64 { return Act::Incense }
     if k == '>' as i64 { return Act::Descend }
-    if k == 'Q' as i64 { return Act::Quit }
+    if k == 'Q' as i64 {
+        g.prompt = "Abandon the descent? (y/n)".to_string()
+        g.render()
+        let yes = read_key() == 'y' as i64
+        g.prompt.clear()
+        return if yes { Act::Quit } else { Act::Nothing }
+    }
     if k == '?' as i64 {
         help_screen()
         return Act::Nothing
@@ -2196,7 +2219,8 @@ fn help_screen() {
 Reach depth {MAX_DEPTH} and strike the Hollow Bell ({YELLOW}\u{3a9}{RESET}) by walking into it.
 
 {BOLD}Moving{RESET}   arrows or hjkl yubn (or the number pad). Walk into a creature to strike it.
-          . or space waits and catches your breath.  s  toggles sneaking.  >  takes stairs.
+          . or space waits and catches your breath.  s  toggles sneaking.
+          x  explores on its own until something happens.  >  walks to the stairs and takes them.
 {BOLD}Items{RESET}    q eats a herb (+10 HP, +2 breath).  e burns incense (reveals the level).
           {CYAN}?{RESET} tablets teach syllables.  {YELLOW}*{RESET} bell shards deepen your breath.
 
@@ -2323,7 +2347,14 @@ fn travel(g: &mut Game, to_stairs: bool) {
     while steps < 400 && !g.over {
         let a = g.auto_step(to_stairs)
         match a {
-            Act::Nothing => return,
+            Act::Nothing => {
+                if to_stairs && g.t(g.px, g.py) == T_STAIRS {
+                    let _ = g.perform(Act::Descend)
+                    g.world_turn()
+                    g.compute_fov()
+                }
+                return
+            }
             _ => {}
         }
         let msgs = g.msgs

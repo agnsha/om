@@ -41,7 +41,8 @@ Integer arithmetic currently wraps on overflow (Rust panics in debug builds and
 wraps in release builds); `checked_add`, `saturating_add` and friends are there
 when you want overflow handled explicitly.
 
-String and char escapes: `\n \t \r \0 \\ \" \' \u{...}`.
+String and char escapes: `\n \t \r \0 \\ \" \' \u{...}`, and `\x41` (two hex
+digits, up to `\x7F`) in strings. `"\x1b[1m"` starts an ANSI terminal style.
 
 `i8::MIN`, `u64::MAX`, `u32::BITS`, `f64::EPSILON`, `f64::INFINITY`, `f64::NAN`
 and `char::MAX` are available.
@@ -492,6 +493,9 @@ enum List { Cons(i64, Box[List]), Nil }
 | `print(x)` | Prints any value (numbers, strings, tuples, structs, enums), followed by a newline |
 | `panic(msg)` | Prints `panic: msg` to stderr and exits with code 101 |
 | `assert(cond)`, `assert(cond, msg)` | Panics if `cond` is false |
+| `read_key()` | Waits for one key and returns it as an `i64`: the byte (`'a' as i64`, `10` for Enter, `27` for Esc), `1000`..`1003` for the arrow keys (up, down, right, left), or `-1` at the end of input. On a terminal the key is not echoed and needs no Enter; with piped input it reads one byte. |
+| `time_ns()` | Nanoseconds since 1970, as an `i64` (for timing and random seeds) |
+| `sleep_ms(ms)` | Flushes output and pauses for `ms` milliseconds |
 
 ## Program entry
 

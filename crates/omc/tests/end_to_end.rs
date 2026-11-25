@@ -610,3 +610,54 @@ fn borrowed_list_loops_self_constructors_and_string_eq() {
     let got = compile_error("fn f(v: &Vec[i64]) { v[0] = 2 } fn main() {}");
     assert!(got.contains("read-only") || got.contains("cannot"), "{got}");
 }
+
+/// Build `src` and run it with `input` on stdin; return stdout.
+fn run_with_input(src: &str, name: &str, input: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::Stdio;
+    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}", std::process::id()));
+    omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
+    let mut child =
+        Command::new(&exe).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("run compiled program");
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let _ = std::fs::remove_file(&exe);
+    assert!(out.status.success(), "{name} exited with {}", out.status);
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn read_key_time_and_sleep() {
+    let src = r#"
+        fn main() {
+            let t0 = time_ns()
+            sleep_ms(5)
+            print(time_ns() - t0 >= 5_000_000)
+            print(t0 > 1_600_000_000_000_000_000)
+            let mut keys = String::new()
+            loop {
+                let k = read_key()
+                if k < 0 { break }
+                keys.push_str("{k} ")
+            }
+            print(keys)
+        }
+    "#;
+    assert_eq!(run_with_input(src, "keys", b"a\n\x1b"), "true\ntrue\n97 10 27 \n");
+}
+
+#[test]
+fn string_escapes_include_unicode_and_hex() {
+    let src = r#"fn main() { print("\u{1b}[1m|\x41\u{e9}\'|\x1b[0m".len()) }"#;
+    assert_eq!(build_and_run(src, "escapes"), "14\n");
+}
+
+#[test]
+fn hollow_bell_game_builds_and_quits() {
+    let src = std::fs::read_to_string(root().join("games/hollow-bell/hollow_bell.om")).unwrap();
+    // Start a seeded game, take a few steps, chant, quit, and leave the title screen.
+    let out = run_with_input(&src, "hollow_bell", b"s42\nllllckaom\n\nQyxq");
+    assert!(out.contains("T H E    H O L L O W    B E L L"), "{out}");
+    assert!(out.contains("Depth 1/6"), "{out}");
+    assert!(out.contains("Seed 42"), "{out}");
+}

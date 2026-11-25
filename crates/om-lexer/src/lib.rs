@@ -451,13 +451,19 @@ impl<'a> Lexer<'a> {
                         Some(b'\'') => '\'',
                         Some(b'x') => {
                             // `\x1b`: two hex digits, at most 7F, as in Rust.
-                            let code = self.src.get(self.pos..self.pos + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+                            let code =
+                                self.src.get(self.pos..self.pos + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
                             match code {
                                 Some(b) if b <= 0x7F => {
                                     self.pos += 2;
                                     b as char
                                 }
-                                _ => return self.err("invalid `\\x` escape; write two hex digits up to 7F, like `\\x1b`", self.pos - 2),
+                                _ => {
+                                    return self.err(
+                                        "invalid `\\x` escape; write two hex digits up to 7F, like `\\x1b`",
+                                        self.pos - 2,
+                                    )
+                                }
                             }
                         }
                         Some(b'u') if self.peek(0) == Some(b'{') => {
@@ -468,7 +474,9 @@ impl<'a> Lexer<'a> {
                                     self.pos = e + 1;
                                     ch
                                 }
-                                _ => return self.err("invalid unicode escape; write it like `\\u{1F600}`", self.pos - 2),
+                                _ => {
+                                    return self.err("invalid unicode escape; write it like `\\u{1F600}`", self.pos - 2)
+                                }
                             }
                         }
                         _ => return self.err("unknown escape sequence", self.pos - 2),
