@@ -104,7 +104,7 @@ pub fn walk_expr(v: &mut impl Visitor, e: &Expr) {
         | ExprKind::Ref(_, a)
         | ExprKind::Try(a)
         | ExprKind::Cast(a, _) => walk_expr(v, a),
-        ExprKind::Binary(_, a, b) => {
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) | ExprKind::ListRepeat(a, b) => {
             walk_expr(v, a);
             walk_expr(v, b);
         }
@@ -124,7 +124,7 @@ pub fn walk_expr(v: &mut impl Visitor, e: &Expr) {
                 walk_expr(v, x);
             }
         }
-        ExprKind::Tuple(items) => {
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
             for x in items {
                 walk_expr(v, x);
             }

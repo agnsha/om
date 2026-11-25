@@ -1,0 +1,81 @@
+struct Noisy { id: i64 }
+
+impl Drop for Noisy {
+    fn drop(&mut self) { print("drop {self.id}") }
+}
+
+fn take(n: Noisy) { print("took {n.id}") }
+
+fn peek(v: &Vec[i64]) -> i64 { v.len() as i64 }
+
+fn grow(v: &mut Vec[i64]) { v.push(99) }
+
+fn make(id: i64) -> Noisy { Noisy { id: id } }
+
+fn vecs() {
+    let mut v: Vec[i64] = Vec::new()
+    for i in 0..10 { v.push(i * i) }
+    print(v.len())
+    print(v[3])
+    v[3] = 100
+    print(v[3])
+    v[3] += 1
+    print(v[3])
+    print(v.pop())
+    print(v.len())
+    let w = [5, 3, 9, 1, 7]
+    print(w.len())
+    print(w[4])
+    let mut z = [3, 1, 2, 3, 1]
+    z.sort()
+    print(z[0])
+    print(z[4])
+    z.dedup()
+    print(z.len())
+    z.insert(0, 42)
+    print(z.remove(1))
+    print(z)
+    let r = [0u8; 5]
+    print(r.len())
+}
+
+fn main() {
+    let a = Noisy { id: 1 }
+    let b = a
+    take(b)
+    print("after take")
+    {
+        let _c = make(2)
+        print("inner")
+    }
+    print("after inner")
+    let mut v = [1, 2, 3]
+    let w = v.clone()
+    v.push(4)
+    grow(&mut v)
+    print(v)
+    print(w)
+    print(peek(&v))
+    print(peek(&[7, 8]))
+    let mut grid: Vec[Vec[i64]] = Vec::new()
+    for i in 0..3 {
+        let mut row: Vec[i64] = Vec::new()
+        for j in 0..3 { row.push(i * 3 + j) }
+        grid.push(row)
+    }
+    print(grid)
+    grid[1].push(42)
+    print(grid[1])
+    let mut ns: Vec[Noisy] = Vec::new()
+    ns.push(make(10))
+    ns.push(make(11))
+    let x = Some(make(5))
+    match x {
+        Some(n) => print("got {n.id}"),
+        None => print("none"),
+    }
+    let mut d = make(20)
+    d = make(21)
+    vecs()
+    print("end")
+}

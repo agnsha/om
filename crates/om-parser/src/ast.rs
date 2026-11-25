@@ -244,6 +244,8 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    /// `*boxed`
+    Deref,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,6 +282,12 @@ pub enum ExprKind {
     Try(Box<Expr>),
     /// `value as Type`
     Cast(Box<Expr>, TypeExpr),
+    /// `list[index]`
+    Index(Box<Expr>, Box<Expr>),
+    /// `[a, b, c]`: builds a `Vec`.
+    List(Vec<Expr>),
+    /// `[value; count]`: a `Vec` of `count` clones of `value`.
+    ListRepeat(Box<Expr>, Box<Expr>),
     /// An interpolated string: `"x = {x}"`.
     Interp(Vec<InterpPart>),
     If(Box<Expr>, Block, Option<Block>),

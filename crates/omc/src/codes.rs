@@ -32,7 +32,7 @@ pub const CODES: &[Code] = &[
         code: "E0107",
         title: "attribute syntax",
         patterns: &["Om has no attributes$"],
-        explain: "Om has no `#[...]` attributes. Every value can be printed, compared with `==` when it implements `Eq`, and copied, so `#[derive(...)]` is unnecessary. Tests are functions named `test_*`. Delete the attribute line.",
+        explain: "Om has no `#[...]` attributes. Every value can be printed and cloned, and compared with `==` when it implements `Eq`, so `#[derive(...)]` is unnecessary. Tests are functions named `test_*`. Delete the attribute line.",
     },
     Code {
         code: "E0109",
@@ -102,7 +102,7 @@ pub const CODES: &[Code] = &[
     Code {
         code: "E0100",
         title: "syntax error",
-        patterns: &["expected $, found $"],
+        patterns: &["expected $, found $", "a range loop binds one name$"],
         explain: "The parser expected something else here. Semicolons are optional, generics use `[T]`, and struct literals are not allowed directly in `if`/`while`/`match` headers (wrap them in parentheses).",
     },
     // ---------- E02xx: names ----------
@@ -122,7 +122,7 @@ pub const CODES: &[Code] = &[
         code: "E0202",
         title: "unknown type",
         patterns: &["cannot find type `$`"],
-        explain: "No type has this name. Om's types are `i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64 bool char str`, tuples, and your structs and enums. Rust's `String` and `&str` are `str`.",
+        explain: "No type has this name. Om's types are `i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64 bool char str String`, `Vec[T]`, `Box[T]`, `Option[T]`, `Result[T, E]`, tuples, and your structs and enums. Rust's `&str` is `str`, and generics use `[]`: `Vec[i64]`.",
     },
     Code {
         code: "E0203",
@@ -140,7 +140,7 @@ pub const CODES: &[Code] = &[
         code: "E0205",
         title: "unknown method",
         patterns: &["$ has no method named `$`$", "`$` has no method or variant named `$`", "$ has no methods"],
-        explain: "The type has no method with this name. `om doc Type` lists its real methods; the error lists close matches. Values are copied, so Rust's `.clone()`, `.to_string()` and `.as_str()` are not needed.",
+        explain: "The type has no method with this name. `om doc Type` lists its real methods; the error lists close matches. Rust conversions such as `.to_owned()`, `.as_ref()` and `.into()` do not exist; `.clone()` and `.to_string()` do.",
     },
     Code {
         code: "E0206",
@@ -424,8 +424,8 @@ pub const CODES: &[Code] = &[
     Code {
         code: "E0606",
         title: "bad assignment target",
-        patterns: &["can only assign to a variable or a field"],
-        explain: "The left side of `=` must be a variable or a field, like `x` or `p.x`.",
+        patterns: &["can only assign to a variable or a field", "can only assign to $"],
+        explain: "The left side of `=` must be a variable, a field, a list element or `*box`, like `x`, `p.x`, `v[i]` or `*b`.",
     },
     // ---------- E07xx: items ----------
     Code {
@@ -543,12 +543,92 @@ pub const CODES: &[Code] = &[
         patterns: &["generic function `$` is never called, so its body was not type-checked"],
         explain: "Generic functions are checked when they are instantiated. One that is never called may hide type errors; call it, add a test, or delete it.",
     },
+    // ---------- E10xx: ownership and borrowing ----------
+    Code {
+        code: "E1000",
+        title: "use after move",
+        patterns: &["use of moved value `$`$", "`$` is moved inside this loop$"],
+        explain: "`String`, `Vec`, `Box` and values that contain them have one owner. Assigning or passing one moves it, and the old name cannot be used again. Pass `&value` to lend it, or call `.clone()` before the move when you need two copies.",
+    },
+    Code {
+        code: "E1001",
+        title: "cannot move out of a borrow",
+        patterns: &[
+            "cannot move out of `$`, which is borrowed$",
+            "cannot move out of `&mut` parameter `$`$",
+            "cannot move out of this box$",
+            "cannot move field `$` out of `$`$",
+            "cannot move a field out of $, which implements Drop",
+            "cannot move an element out of a list$",
+            "cannot move parts out of this place$",
+        ],
+        explain: "Only the owner can give a value away. Clone it (`.clone()`), take it out with a method such as `remove`, `swap_remove` or `pop`, or borrow it with `&`.",
+    },
+    Code {
+        code: "E1002",
+        title: "borrow conflict",
+        patterns: &[
+            "cannot move `$` while $ borrows it",
+            "cannot change `$` while $ borrows it",
+            "cannot pass `$` as `&mut` while also passing a view of its text",
+        ],
+        explain: "While a `str` view or `&` reference points into a value, the value cannot be moved or changed. Finish using the view first, or copy what you need with `.to_string()` or `.clone()`.",
+    },
+    Code {
+        code: "E1003",
+        title: "str view outlives its String",
+        patterns: &[
+            "this `str` points into a temporary String$",
+            "cannot return a `str` that points into$",
+            "this block's `str` points into a temporary String$",
+            "cannot store a `str` view of a String$",
+            "`$` could keep a `str` view of a String past its lifetime$",
+        ],
+        explain: "A `str` is a view of text owned by someone else. A view of a `String` must not outlive it: keep the String in a variable, or turn the view into its own String with `.to_string()`.",
+    },
+    Code {
+        code: "E1004",
+        title: "private fields",
+        patterns: &["the fields of `$` are private$", "`$` has private fields$"],
+        explain: "`Vec`, `String` and `Box` keep their fields private so their memory stays valid. Use their methods (`om doc Vec`).",
+    },
+    Code {
+        code: "E1005",
+        title: "list indexing and literals",
+        patterns: &[
+            "$ cannot be indexed with `[]`",
+            "list indexes must be usize, found $",
+            "list elements must all have the same type: $",
+            "cannot infer the element type of `[]`$",
+            "the count in `[value; count]` must be usize, found $",
+        ],
+        explain: "`v[i]` indexes a `Vec` with a `usize` and panics when `i` is out of range; `v.get(i)` returns an Option instead. List literals `[a, b]` need elements of one type, and `[]` needs a type annotation.",
+    },
+    Code {
+        code: "E1006",
+        title: "bad dereference",
+        patterns: &["cannot dereference $"],
+        explain: "Only a `Box` can be dereferenced with `*`.",
+    },
+    Code {
+        code: "E1007",
+        title: "clone of a Drop type",
+        patterns: &["`$` implements Drop, so it needs its own `Clone` impl$"],
+        explain: "A type with a `Drop` impl manages a resource, so copying its fields would free it twice. Write `impl Clone for T { fn clone(&self) -> Self { ... } }`.",
+    },
     // ---------- E09xx: internal ----------
     Code {
         code: "E0999",
         title: "internal compiler error",
         patterns: &[
             "codegen for `$`: $",
+            "codegen for $ of $: $",
+            "`Ptr` takes one type argument",
+            "intrinsic `$` needs a Ptr, found $",
+            "intrinsic `$` is missing an argument",
+            "intrinsic `$` needs a known Ptr type",
+            "ptr_write of $ into $",
+            "unknown intrinsic `$`",
             "prelude line $",
             "writing object file: $",
             "unsupported host: $",

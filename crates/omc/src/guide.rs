@@ -51,9 +51,16 @@ mod tests {
     fn guide_examples_compile_and_run() {
         let ex = examples(GUIDE);
         assert!(ex.len() >= 2);
-        for src in ex {
-            let d = crate::check(&src);
+        let dir = crate::TempDir::new().unwrap();
+        for (i, src) in ex.iter().enumerate() {
+            let d = crate::check(src);
             assert!(d.is_empty(), "guide example does not compile:\n{src}\n{d:?}");
+            let exe = dir.path().join(format!("guide{i}"));
+            crate::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render("guide", src)));
+            let out = crate::spawn(std::process::Command::new(&exe).stdout(std::process::Stdio::null()))
+                .and_then(|c| c.wait_with_output())
+                .unwrap();
+            assert!(out.status.success(), "guide example {i} exited with {}", out.status);
         }
     }
 

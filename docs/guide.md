@@ -18,15 +18,16 @@ Brief errors look like `E0600 app.om:3:5 message` and then `  fix[auto] 2:9 +"mu
 
 ## Differences from Rust (the usual mistakes)
 
-- Generics use `[]`: `Option[i64]`, `fn first[T: Ord](a: T)`, `impl[T] Stack[T]`. Never `<>`.
-- No macros: `print("x = {x}, sum = {a + b}")` (any expression in `{}`), `panic("...")`, `assert(c)`, `assert_eq(a, b)`.
-- No `pub`, `use`, `mod`, `unsafe`, lifetimes, `#[derive]`, `Box`, `Vec`, `String` (yet). Strings are `str`.
-- Every value is plain data: assignment copies, so no `.clone()`, `.to_string()`, `&str`, `&'a`.
-- `&T` / `&mut T` exist only on parameters, and the call site repeats them: `bump(&mut n)`.
+- Generics use `[]`: `Option[i64]`, `Vec[String]`, `fn first[T: Ord](a: T)`, `impl[T] Stack[T]`. Never `<>`.
+- No macros: `print("x = {x}, sum = {a + b}")` (any expression in `{}`), `panic("...")`, `assert(c)`, `assert_eq(a, b)`. `"..{x}.."` builds a `String` (Rust's `format!`). `[1, 2, 3]` and `[0; n]` make a `Vec`.
+- No `pub`, `use`, `mod`, `unsafe`, lifetimes, `#[derive]`, closures or iterators (yet).
+- Ownership as in Rust: `String`, `Vec[T]`, `Box[T]` (and types holding them) move on assignment and are dropped automatically; `.clone()` deep-copies. Types that own nothing copy implicitly.
+- `str` is Rust's `&str` and string literals are `str`. Make a String with `"a".to_string()` or `String::from("a")`; pass a String where `str` is wanted as `&s`.
+- `&T` / `&mut T` appear on parameters, where the call site repeats them (`bump(&mut n)`), in `let r = &x` and in `for x in &list`. No `&` in struct fields or return types.
 - Semicolons are optional. The last expression of a block is its value.
-- Integer overflow, division by zero and over-wide shifts panic (in every build). Use `wrapping_add`, `checked_add`, `saturating_add` when you mean it.
-- Bare `x.unwrap()` is a compile error outside `test_*` functions (E0900). Use `?`, `unwrap_or`, `match`, or `expect("why it cannot fail")`.
-- `print` takes one argument. Struct, enum and tuple values print without any trait.
+- Integer overflow, division by zero, over-wide shifts and `v[i]` out of range panic (in every build). Use `wrapping_add`, `checked_add`, `saturating_add` or `v.get(i)` when you mean it.
+- Bare `x.unwrap()` is a compile error outside `test_*` functions (E0900). Use `?`, `unwrap_or`, `match`, `expect("why it cannot fail")`, or `.context("what failed")?` to turn an Option or Result into `Result[T, String]` with a readable error trail.
+- `print` takes one argument. Every value prints without any trait.
 - Numbers never convert implicitly: `x as f64 + 1.5`. Unsuffixed literals take the type their context needs.
 
 ## Syntax by example
@@ -73,6 +74,12 @@ fn quarter(n: i64) -> Result[i64, str] {
     halve(h)
 }
 
+fn parse_age(s: str) -> Result[i64, String] {
+    let n = s.trim().parse_int().context("age `{s}`")?
+    if n < 0 { return Err("age {n} is negative") }
+    Ok(n)
+}
+
 fn bump(counter: &mut i64, by: i64) { counter += by }
 
 fn log(n: i64) uses io { print("n = {n}") }
@@ -98,15 +105,21 @@ fn main() {
     defer print("done")
     print(3 |> largest(10))
     print(found.checked_add(i64::MAX).unwrap_or(-1))
+    let mut names: Vec[String] = Vec::new()
+    names.push("ada".to_string())
+    let copy = names.clone()
+    for n in &copy { print("hi {n}, {n.len()} letters") }
+    print(names[0].to_uppercase())
+    match parse_age("x") { Ok(a) => print(a), Err(e) => print(e) }
 }
 ```
 
-- Types: `i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64 bool char str`, tuples `(A, B)` (fields `.0`), `Option[T]` (`Some`, `None`), `Result[T, E]` (`Ok`, `Err`), `Ordering`.
+- Types: `i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64 bool char str String`, `Vec[T]`, `Box[T]`, tuples `(A, B)` (fields `.0`), `Option[T]` (`Some`, `None`), `Result[T, E]` (`Ok`, `Err`), `Ordering`. `om doc Vec` and `om doc String` list their methods.
 - Literals: `1_000`, `0xFF`, `0b1010`, `5u8`, `2.5f32`, `'a'`, `"\n"`, `"{{literal braces}}"`.
 - Control flow: `if`/`else` and `match` are expressions; `while`, `for i in a..b` (`..=` inclusive), `loop` with `break value`, labels `'outer: for ...` with `break 'outer`, `if let`, `while let`, `defer expr` (runs at block exit, newest first).
 - Patterns: `_`, names, literals, ranges `1..=9`, `A | B`, variants, tuples, guards `x if x > 0`. `match` must be exhaustive.
 - Calls: named arguments `f(1, height: 2)`, defaults `fn f(x: i64 = 1)`, pipeline `x |> f(a)` means `f(x, a)`.
-- Traits in the prelude: `Eq` (`==`), `Ord` (`<`, `max`, `min`, `clamp`), `Add Sub Mul Div Rem Neg` (operators), `Default`.
+- Traits in the prelude: `Eq` (`==`), `Ord` (`<`, `max`, `min`, `clamp`), `Add Sub Mul Div Rem Neg` (operators), `Default`, `Clone`, `Drop`.
 - `main` returns nothing or an `i64` exit code. A panic exits with 101.
 
 ## Effects
@@ -137,3 +150,4 @@ Codes are stable. `om explain CODE` gives the long form; `om guide --codes` list
 - E03xx types: E0300 operand types, E0301 mismatch, E0302 return type, E0306 cannot infer, E0307 `?`, E0310 bound
 - E04xx calls, E05xx patterns (E0500 non-exhaustive match), E06xx mutability (E0600 needs `let mut`, E0603 needs `&mut`)
 - E07xx items, E08xx control flow, E0900 bare unwrap, E0901 undeclared effect, W0100 unchecked generic
+- E10xx ownership: E1000 use after move, E1001 move out of a borrow, E1002 borrow conflict, E1003 `str` outlives its String

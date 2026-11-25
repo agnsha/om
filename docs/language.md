@@ -19,7 +19,10 @@ later phases are in the [design document](design.md).
 | `f32`, `f64` | Floats. Literals need a digit after the dot (`1.0`), or an exponent (`1e9`). |
 | `bool` | `true` or `false` |
 | `char` | A Unicode scalar value: `'a'`, `'\n'`, `'\u{1F600}'`. |
-| `str` | A string literal. Strings can be stored, passed and printed, not yet built at runtime. |
+| `str` | A view of UTF-8 text (a pointer and a length), like Rust's `&str`. String literals are `str`. |
+| `String` | Growable text that owns its bytes. |
+| `Vec[T]` | A growable list on the heap. `[1, 2, 3]` and `[0; n]` make one. |
+| `Box[T]` | One value on the heap; lets a type contain itself. |
 | `(A, B, ...)` | A tuple. Read fields with `.0`, `.1`, or destructure with `let (a, b) = t`. |
 | `Option[T]`, `Result[T, E]` | Built in, see below. |
 
@@ -53,9 +56,9 @@ let name = "Om"
 print("Hello from {name}! 6 * 7 = {6 * 7}, big: {fib(30) > 1000}")
 ```
 
-In phase 0, interpolated strings can only be passed to `print`: Om has no
-runtime strings until phase 4. Inside `{...}`, nested string literals are not
-allowed.
+An interpolated string builds a `String` (Rust's `format!`). Where a `str` is
+expected, such as `s.push_str("{i};")`, it is a temporary that lives until the
+end of the statement. Inside `{...}`, nested string literals are not allowed.
 
 *Why:* Rust's `format!` only accepts plain variable names inline
 (`{name}` works, `{a + b}` does not). Python, Kotlin, Swift and JavaScript
@@ -209,6 +212,9 @@ while i < 10 { i += 1 }
 
 for n in 0..10 { print(n) }      // 0 to 9
 for n in 1..=10 { print(n) }     // 1 to 10
+for x in &list { print(x) }      // borrow each element
+for x in list { take(x) }        // move each element out (list is used up)
+for (i, name) in &pairs { ... }  // patterns work too
 
 let found = loop {               // `loop` can return a value with `break`
     i += 1
@@ -407,6 +413,71 @@ while let Some(n) = stack { ... }
 
 A `let` pattern must always match; use `if let` or `match` for patterns that
 might fail.
+
+## Ownership, Vec, String and Box
+
+Om manages memory the way Rust does: every heap value has one owner, and it is
+freed when the owner goes out of scope. There is no garbage collector and no
+reference counting.
+
+```om
+let a = [1, 2, 3]            // Vec[i64]
+let b = a                    // the list moves to `b`
+print(a)                     // error: use of moved value `a`
+let c = b.clone()            // a deep copy; `b` is still usable
+```
+
+Types that own nothing (numbers, `bool`, `char`, `str`, and structs, tuples and
+enums made only of those) are copied instead of moved, like Rust's `Copy`.
+`.clone()` works on every type. A type that implements `Drop` runs its `drop`
+method when it goes away, in the same order as Rust: locals in reverse order of
+declaration, then fields in order; list elements front to back.
+
+```om
+struct File { name: String }
+impl Drop for File {
+    fn drop(&mut self) { print("closing {self.name}") }
+}
+```
+
+Borrowing uses the `&` and `&mut` parameters described above. `let r = &x` and
+`match &x` borrow `x` without moving it; `x` cannot be changed or moved while
+`r` is in scope. A function that takes `&T` can be passed a loop element
+`for x in &list` directly.
+
+**`Vec[T]`**: `Vec::new()`, `with_capacity`, `push`, `pop` (returns an
+`Option`), `insert`, `remove`, `swap_remove`, `swap`, `truncate`, `clear`,
+`reverse`, `len`, `is_empty`, `capacity`, `get`/`first`/`last` (return a clone
+in an `Option`), `append`, `extend_from_slice`, `contains`, `dedup` and a
+stable `sort`. `v[i]` reads or assigns an element, and an index past the end
+panics with Rust's message. `print` shows `[1, 2, 3]`.
+
+**`String` and `str`**: `String::new()`, `String::from("text")`,
+`"text".to_string()` (and `to_string()` on any value), `push`, `push_str`,
+`pop`, `insert`, `insert_str`, `remove`, `truncate`, `clear`, `len`,
+`as_str`, `into_bytes`, `String::from_utf8`. `s + "more"` and `s += "more"`
+append. Every `str` method also works on a `String`: `len`, `is_empty`,
+`contains`, `starts_with`, `ends_with`, `find`, `rfind`, `trim`,
+`trim_start`, `trim_end`, `strip_prefix`, `strip_suffix`, `split_once`,
+`split`, `split_whitespace`, `lines`, `chars`, `bytes`, `replace`, `repeat`,
+`to_uppercase`, `to_lowercase` (ASCII letters only for now),
+`eq_ignore_ascii_case`, `is_char_boundary`, `slice(start, end)` (Rust's
+`&s[start..end]`), and `parse_int()` / `parse_float()`, which return a
+`Result`. Strings compare with `==` and `<`. Where a function takes `str`, pass
+a String as `&s`.
+
+A `str` taken from a String may not outlive it. Om checks this conservatively:
+the String is frozen while the view is in scope, and returning a view of a local
+String, keeping one in an outer variable or in a `&mut` list, or taking one of a
+temporary are errors. Use `.to_string()` to keep a copy instead.
+
+**`Box[T]`**: `Box::new(value)`. `*b` reads or assigns the value, and moves it
+out of an owned box. Fields and methods of the value work on the box directly.
+A recursive type needs one:
+
+```om
+enum List { Cons(i64, Box[List]), Nil }
+```
 
 ## Panics
 

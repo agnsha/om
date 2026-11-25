@@ -142,7 +142,6 @@ pub fn similar<'b>(name: &str, candidates: impl IntoIterator<Item = &'b String>)
 /// Rust names with a direct Om equivalent.
 fn rust_type(name: &str) -> Option<&'static str> {
     Some(match name {
-        "String" => "str",
         "i128" => "i64",
         "u128" => "u64",
         "PartialEq" => "Eq",
@@ -151,9 +150,8 @@ fn rust_type(name: &str) -> Option<&'static str> {
     })
 }
 
-/// Methods Rust needs to turn borrowed or owned data into values. Om values are
-/// already plain values, so the call can simply go.
-const NOOP_METHODS: [&str; 7] = ["clone", "to_string", "to_owned", "as_str", "as_ref", "borrow", "into"];
+/// Rust conversion methods Om does not have; the value can be used as it is.
+const NOOP_METHODS: [&str; 4] = ["to_owned", "as_ref", "borrow", "into"];
 
 /// Add fixes to `d` (and, for Rust habits, a clearer message).
 pub fn enrich(d: &mut Diagnostic, cx: &Context) {
@@ -197,13 +195,7 @@ pub fn enrich(d: &mut Diagnostic, cx: &Context) {
                 if cx.text(at) != name {
                     break 'arms;
                 }
-                if name == "String::from" || name == "String::new" {
-                    // `String::from("x")` is just `"x"` in Om.
-                    let inner = cx.text(span).strip_prefix(name).unwrap_or("");
-                    let lit = inner.trim().strip_prefix('(').and_then(|s| s.strip_suffix(')')).unwrap_or("").trim();
-                    let lit = if lit.is_empty() { "\"\"" } else { lit };
-                    add(Auto, span, lit, "Om strings need no `String::from`".into());
-                } else if name == "println" || name == "print_line" || name == "puts" || name == "echo" {
+                if name == "println" || name == "print_line" || name == "puts" || name == "echo" {
                     add(Auto, at, "print", "Om's `print` adds the newline".into());
                 } else if let Some(alt) = similar(name, &cx.functions).into_iter().next() {
                     add(Maybe, at, &alt, format!("did you mean `{alt}`?"));
@@ -232,7 +224,7 @@ pub fn enrich(d: &mut Diagnostic, cx: &Context) {
                     let call = format!(".{m}()");
                     if text.ends_with(&call) {
                         let at = Span::new(span.end - call.len(), span.end);
-                        add(Auto, at, "", format!("Om values are plain values; `.{m}()` is not needed"));
+                        add(Auto, at, "", format!("Om has no `.{m}()`; the value can be used as it is"));
                         break 'arms;
                     }
                 }
@@ -858,8 +850,8 @@ mod tests {
 
     #[test]
     fn removes_rust_only_syntax() {
-        let src = "use std::io;\n#[derive(Debug, Clone)]\npub struct P { x: i64 }\npub fn main() { let s: String = \"a\".to_string(); print(s) }\n";
-        assert_eq!(fixed(src), "struct P { x: i64 }\nfn main() { let s: str = \"a\"; print(s) }\n");
+        let src = "use std::io;\n#[derive(Debug, Clone)]\npub struct P { x: i64 }\npub fn main() { let s: i128 = 1; print(s.to_owned()) }\n";
+        assert_eq!(fixed(src), "struct P { x: i64 }\nfn main() { let s: i64 = 1; print(s) }\n");
     }
 
     #[test]

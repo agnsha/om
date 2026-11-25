@@ -1,0 +1,67 @@
+enum List {
+    Cons(i64, Box[List]),
+    Nil,
+}
+
+fn sum(l: &List) -> i64 {
+    match l {
+        List::Cons(v, rest) => v + sum(&*rest),
+        List::Nil => 0,
+    }
+}
+
+struct Node { val: i64, kids: Vec[Tree] }
+struct Tree { node: Box[Node] }
+
+struct P { x: i64, name: String }
+impl Drop for P { fn drop(&mut self) { print("drop {self.name}") } }
+impl Clone for P { fn clone(&self) -> P { P { x: self.x, name: self.name.clone() + "2" } } }
+
+fn depth(t: &Tree) -> i64 {
+    let mut best = 0
+    for k in &t.node.kids {
+        let d = depth(k)
+        if d > best { best = d }
+    }
+    best + 1
+}
+
+fn boxes() {
+    let mut b = Box::new(5)
+    print(*b + 1)
+    *b = 10
+    print(b)
+    let l = List::Cons(1, Box::new(List::Cons(2, Box::new(List::Cons(3, Box::new(List::Nil))))))
+    print(sum(&l))
+    print(l)
+    let p = Box::new(P { x: 3, name: String::from("pete") })
+    print(p.x)
+    print(p.name.len())
+    let q = p.clone()
+    print(q.name)
+    let inner = *p
+    print("moved {inner.name}")
+    let t = Tree { node: Box::new(Node { val: 1, kids: [
+        Tree { node: Box::new(Node { val: 2, kids: Vec::new() }) },
+        Tree { node: Box::new(Node { val: 3, kids: [Tree { node: Box::new(Node { val: 4, kids: Vec::new() }) }] }) },
+    ] }) }
+    print(depth(&t))
+    let mut bv = Box::new([1, 2])
+    bv.push(3)
+    print(bv.len())
+    print(bv)
+}
+
+fn concat() {
+    let mut s = String::from("a")
+    s += "b"
+    s = s + "c"
+    let t = s.clone() + "{1 + 1}"
+    print(s)
+    print(t)
+}
+
+fn main() {
+    boxes()
+    concat()
+}

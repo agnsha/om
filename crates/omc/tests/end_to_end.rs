@@ -253,7 +253,10 @@ fn enums_and_match() {
 }
 
 fn compile_error(src: &str) -> String {
-    omc::compile(src).expect_err("program should be rejected").message
+    match omc::compile(src) {
+        Ok(_) => panic!("program should be rejected: {src}"),
+        Err(e) => e.message,
+    }
 }
 
 #[test]
@@ -276,7 +279,6 @@ fn rejects_bad_programs() {
         ("fn f(a: i64, b: i64) {} fn main() { f(a: 1, 2) }", "positional arguments must come before"),
         ("fn f(a: i64) {} fn main() { f(1, a: 2) }", "given twice"),
         ("fn f(a: i64, b: i64) {} fn main() { f(1) }", "missing argument `b`"),
-        ("fn main() { let s = \"x{1}\" }", "only be used inside `print`"),
         ("fn f() -> i64 { defer { return 1 } 2 } fn main() {}", "not allowed inside `defer`"),
         ("fn main() { print(1 |> 2) }", "right side of `|>`"),
         ("enum E { A, B } fn main() { match E::A { E::A => 1 } }", "missing: E::B "),
@@ -508,4 +510,92 @@ fn rejects_bad_number_programs() {
         let got = compile_error(src);
         assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
     }
+}
+
+#[test]
+fn vec_moves_drops_and_borrows() {
+    // Drop order and output were checked against the same program in Rust.
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("ownership.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("ownership.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "ownership"), want);
+    let (_, err, code) = run_status("fn main() { let v = [1, 2]\n print(v[5]) }", "oob");
+    assert_eq!(code, 101);
+    assert!(err.contains("index out of bounds: the len is 2 but the index is 5"), "{err}");
+}
+
+#[test]
+fn rejects_ownership_errors() {
+    let n = "struct N { id: i64 } impl Drop for N { fn drop(&mut self) {} } fn take(n: N) {} ";
+    let cases = [
+        ("fn main() { let a = N { id: 1 }; take(a); take(a) }", "use of moved value `a`"),
+        ("fn main() { let a = N { id: 1 }; for i in 0..3 { take(a) } }", "moved inside this loop"),
+        (
+            "fn main() { let mut v = [1]; let r = &v; v.push(2); print(r.len()) }",
+            "cannot change `v` while `r` borrows it",
+        ),
+        ("fn main() { let v = [1]; v.push(2) }", "declare it with `let mut v`"),
+        ("fn main() { let v = [1]; print(v.len) }", "the fields of `Vec` are private"),
+        ("fn f(n: &N) -> N { n } fn main() {}", "cannot move out of `n`, which is borrowed"),
+        (
+            "fn main() { let a = N { id: 1 }; let b = if true { a } else { N { id: 2 } }; take(a) }",
+            "use of moved value `a`",
+        ),
+        ("fn main() { let v = [N { id: 1 }]; let x = v[0] }", "cannot move parts out of this place"),
+    ];
+    for (src, want) in cases {
+        let src = format!("{n}{src}");
+        let got = compile_error(&src);
+        assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
+    }
+}
+
+#[test]
+fn strings_and_for_loops() {
+    // Output checked against the same program in Rust (with Rust spellings of the
+    // non-Rust helpers such as `parse_int` and `slice`).
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("strings.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("strings.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "strings"), want);
+}
+
+#[test]
+fn rejects_dangling_string_views() {
+    let cases = [
+        (
+            "fn main() { let mut s = String::from(\" a \"); let t = s.trim(); s.push_str(\"x\"); print(t) }",
+            "cannot change `s` while `t` borrows it",
+        ),
+        ("fn main() { let t: str = \"{1}\"; print(t) }", "points into a temporary String"),
+        ("fn f() -> str { let s = String::from(\"a\"); s.as_str() } fn main() {}", "points into `s`, which is dropped"),
+        (
+            "fn main() { let mut s = String::from(\"ab\"); s.push_str(s.as_str()) }",
+            "while also passing a view of its text",
+        ),
+        (
+            "fn main() { let s = String::from(\"ab\"); let mut v: Vec[str] = Vec::new(); v.push(s.as_str()) }",
+            "could keep a `str` view",
+        ),
+        ("fn main() { let s = String::from(\"a\"); let mut t = \"x\"; t = s.as_str() }", "cannot store a `str` view"),
+        (
+            "fn main() { let s = String::from(\"a,b\"); let p = s.split(\",\"); take(s) } fn take(s: String) {}",
+            "cannot move `s` while `p` borrows it",
+        ),
+        ("fn main() { let mut v = [1]; for x in &mut v {} }", "not supported yet"),
+        ("fn main() { let s = String { vec: Vec::new() } }", "has private fields"),
+    ];
+    for (src, want) in cases {
+        let got = compile_error(src);
+        assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
+    }
+}
+
+#[test]
+fn boxes_and_recursive_types() {
+    // Output and drop order checked against the same program in Rust.
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("boxes.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("boxes.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "boxes"), want);
 }

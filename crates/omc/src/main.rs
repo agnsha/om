@@ -268,6 +268,7 @@ fn cmd_run(args: &[String]) -> i32 {
 fn exit_code(s: std::process::ExitStatus) -> i32 {
     #[cfg(unix)]
     if let Some(sig) = std::os::unix::process::ExitStatusExt::signal(&s) {
+        eprintln!("error: the program was killed by signal {sig}");
         return 128 + sig;
     }
     s.code().unwrap_or(1)

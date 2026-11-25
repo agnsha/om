@@ -1,0 +1,33 @@
+took 1
+drop 1
+after take
+inner
+drop 2
+after inner
+[1, 2, 3, 4, 99]
+[1, 2, 3]
+5
+2
+[[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+[3, 4, 5, 42]
+got 5
+drop 5
+drop 20
+10
+9
+100
+101
+Some(81)
+9
+5
+7
+1
+3
+3
+1
+[42, 2, 3]
+5
+end
+drop 21
+drop 10
+drop 11

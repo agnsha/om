@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/agnsha/om/actions/workflows/ci.yml"><img src="https://github.com/agnsha/om/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License"></a>
-  <img src="https://img.shields.io/badge/status-phase%200%20(early)-orange" alt="Status">
+  <img src="https://img.shields.io/badge/status-phase%203%20(early)-orange" alt="Status">
 </p>
 
 ```om
@@ -27,10 +27,12 @@ $ om run examples/hello.om
 Hello, Om!
 ```
 
-> **Status: early and experimental.** Om is in phase 0: the compiler parses a small
-> language and produces real native executables through
-> [Cranelift](https://cranelift.dev), but ownership, structs, generics and the
-> standard library are still ahead. See the [roadmap](#roadmap).
+> **Status: early and experimental.** The compiler produces real native
+> executables through [Cranelift](https://cranelift.dev) and already has
+> structs, enums, generics, traits, ownership with automatic drop, `Vec`,
+> `String` and `Box`. Closures, iterators, modules and most of the standard
+> library are still ahead. See the [roadmap](#roadmap) and the
+> [Rust parity checklist](docs/rust-parity.md).
 
 ## Why Om
 
@@ -161,7 +163,8 @@ The compiler is written in Rust and split into small crates. See
 | 1 | Loops, `f64`, structs, methods, enums, `match`, `&`/`&mut` parameters | ✅ done |
 | 2 | Generics, `Option`/`Result` and `?`, tuples, `if let`/`while let`, panics | ✅ done |
 | 2.5 | Traits, bounds, operator overloading, all integer types, `f32`, `char`, bit operations, loop labels | ✅ done |
-| 3 | Memory model: arrays, `String`, `Vec`, `Box`, move checking, closures, iterators | next |
+| 3 | Memory model: `Vec`, `String`, `Box`, moves, drop, clone, borrow freezing, `for` over lists | ✅ done |
+| 3.5 | Closures, iterators, `HashMap`, modules and `pub` | next |
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
 | 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |
