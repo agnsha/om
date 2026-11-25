@@ -192,3 +192,9 @@ blockquote.planned strong{color:var(--plan)}
 /* ---------- footer ---------- */
 .foot{border-top:1px solid var(--line);padding:28px max(4vw,16px) 44px;font-size:13.5px;color:var(--faint);display:flex;gap:24px;justify-content:space-between;flex-wrap:wrap;background:var(--hull)}
 .foot div:first-child{max-width:72ch}
+
+/* ---------- intro + hero (React mounts) ---------- */
+.intro{height:calc(100svh - 64px);min-height:420px;background:var(--void);position:relative}
+.om-intro-stage{width:100%;height:100%}
+#om-hero{background:#06070b}
+#om-hero .lys-stage{top:64px}

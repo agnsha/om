@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Marked } from "marked";
+import { build as esbuild } from "esbuild";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(ROOT, "content");
@@ -184,7 +185,7 @@ function head(title, desc, here) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="${css}">
+<link rel="stylesheet" href="${css}">${here === "index.html" ? '\n<link rel="stylesheet" href="css/react.css">' : ""}
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -286,29 +287,9 @@ fn main() {
 }`;
   return `${head("Om: how to use the Om programming language", "Install Om, write your first program, learn the language and its tools. Om is a compiled systems language with Rust's memory model and less to write.", here)}
 <main id="main">
-<section class="hero">
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <h1>Native code,<br>no garbage collector,<br><span class="sig">less to write.</span></h1>
-      <p class="lede">Om is a compiled systems language with Rust's ownership model and no lifetime annotations. This site shows you how to install it, write your first program and learn the whole language.</p>
-      <div class="cta">
-        <a class="btn p" href="install.html">Install Om ${ARROW}</a>
-        <a class="btn" href="getting-started.html">Your first program</a>
-      </div>
-      <p class="status">Early and experimental. Everything here runs on today's compiler unless it is marked <span class="badge review">in review</span> or <span class="badge planned">planned</span>.</p>
-    </div>
-    <div class="hero-art">
-      ${SIGIL}
-      <div class="term">
-        <div class="bar"><b>hello.om</b><span>compiled with Cranelift</span></div>
-        <pre><code>${highlightOm(hello)}</code></pre>
-        <pre class="out"><code><span class="pr">$</span> om run hello.om
-Hello, Om!
-fib(20) = 6765</code></pre>
-      </div>
-    </div>
-  </div>
-</section>
+<section id="om-intro" class="tw intro" aria-label="Om"></section>
+<div id="om-hero" class="tw"></div>
+<noscript><section class="band"><div class="wrap"><h1>Om</h1><p>A compiled systems language with Rust's ownership model, no garbage collector and no lifetime annotations.</p><p><a class="more" href="install.html">Install Om</a></p></div></section></noscript>
 
 <section class="band" id="install">
   <div class="wrap split">
@@ -377,7 +358,7 @@ om check app.om          # type-check only, fastest`)}</code></pre></div>
   </div>
 </section>
 </main>
-${FOOT}`;
+${FOOT.replace("</body>", '<script type="module" src="js/home.js"></script>\n</body>')}`;
 }
 
 // ---------- write everything ----------
@@ -404,4 +385,16 @@ write(
   "404.html",
   `${head("Not found · Om", "Page not found", "404.html")}<main id="main" class="band"><div class="wrap"><h1>Page not found</h1><p>That page doesn't exist. Try the <a href="/">home page</a> or <a href="/learn.html">the overview</a>.</p></div></main>${FOOT}`,
 );
+await esbuild({
+  entryPoints: [path.join(ROOT, "app/home.tsx")],
+  bundle: true,
+  minify: true,
+  format: "esm",
+  target: "es2020",
+  jsx: "automatic",
+  define: { "process.env.NODE_ENV": '"production"' },
+  outfile: path.join(OUT, "js/home.js"),
+  logLevel: "warning",
+});
+write("css/react.css", fs.readFileSync(path.join(ROOT, "app/utilities.css")));
 console.log(`built ${mdFiles.length + 3} pages into dist/`);

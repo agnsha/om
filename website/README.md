@@ -14,6 +14,8 @@ npx serve dist       # or open dist/index.html
 - `content/` is the Markdown. `content/docs/` holds copies of the repository's
   `docs/` pages; refresh them when those change.
 - `static/` is copied as-is (stylesheet, images, Cloudflare `_headers`).
+- `app/` holds the two React pieces on the home page (the glass Om logo intro and
+  the black bat flower hero). esbuild bundles them into `dist/js/home.js`.
 - `build.mjs` turns `.md` links into `.html`, links GitHub `docs/` URLs to the
   site's copies, and highlights `om` code blocks.
 - Pages that describe work not merged yet start with an **In review** note.
