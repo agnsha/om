@@ -314,7 +314,10 @@ fn compiling_never_runs_user_code() {
     // when it is run.
     let dir = TempDir::new().unwrap();
     let marker = dir.path().join("ran");
-    let src = format!("fn main() {{ loop {{}} }}\nconst PATH: str = \"{}\"\n", marker.display());
+    let src = format!(
+        "fn main() {{ loop {{}} }}\nconst PATH: str = \"{}\"\n",
+        marker.display().to_string().replace('\\', "\\\\")
+    );
     let start = Instant::now();
     let d = omc::check(&src);
     assert!(d.is_empty(), "{d:?}");
