@@ -22,7 +22,7 @@ works, ⬜ planned.
 | Floats `f32`, `f64`, including `%` | ✅ | |
 | `bool`, `char` (Unicode, with escapes) | ✅ | |
 | `as` casts | ✅ | Same rules as Rust: integer widening and truncation, saturating float→int, `u8 as char`, `char as u32` |
-| Overflow checks in debug builds | ⬜ | Arithmetic currently wraps |
+| Overflow checks in debug builds | ✅ | Om checks in every build: `+ - *`, negation, `/` and `%` (by zero and `MIN / -1`) and over-wide shifts panic with Rust's messages; `wrapping_*`, `checked_*`, `saturating_*` opt out |
 | `const` items | ✅ | Literal values only; const expressions ⬜ |
 | Associated constants on built-in types (`u8::MAX`, `f64::EPSILON`) | ✅ | User-defined associated consts ⬜ |
 | Standard number and char methods | 🟡 | The common ones (see the language reference); more over time |
@@ -104,14 +104,19 @@ works, ⬜ planned.
 |---|---|---|
 | Modules, `mod`, `use`, `pub` | ⬜ | |
 | Packages and a package manager | ⬜ | |
-| Built-in tests (`om test`) | ⬜ | |
-| Formatter (`om fmt`) | ⬜ | |
-| `panic`, `assert`, `unwrap`/`expect` | ✅ | Message on stderr, exit code 101 like Rust |
+| Built-in tests (`om test`) | ✅ | `fn test_*()`, each in its own process with a timeout; passing results are cached by content hash; `--json` |
+| Formatter (`om fmt`) | ✅ | Layout only (indentation, blank lines, trailing space); `--check` for CI |
+| `panic`, `assert`, `unwrap`/`expect` | ✅ | Message on stderr, exit code 101 like Rust. Bare `.unwrap()` outside `fn test_*` is a compile error (E0900), a deliberate difference that makes failure handling explicit; use `expect`, `?` or `unwrap_or` |
+| `assert_eq` | ✅ | A function, not a macro; prints both values like Rust |
+| Compiler diagnostics | ✅ | Every message has a stable code (`om explain E0200`), all errors in one run, machine-applicable fixes (`om fix`), `--brief` and `--json` output |
+| Docs from the command line | ✅ | `om doc Vec`, `om doc Option.unwrap_or`, `om doc` lists everything |
 | Threads, `Send`/`Sync`, async | ⬜ | Om plans structured concurrency |
 | C FFI (`extern`) | ⬜ | |
 
 ## Extras Om has that Rust doesn't
 
 Default and named arguments, the `|>` pipeline operator, interpolation of any
-expression in strings, `defer`, and printing any value without `derive`.
+expression in strings, `defer`, printing any value without `derive`, checked
+effects (`uses io`, `uses panic`) with `om audit`, `context()` error trails,
+and tooling built for AI agents (`om guide`, `om fix`, brief and JSON errors).
 See the [language reference](language.md).

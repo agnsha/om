@@ -73,8 +73,30 @@ om run examples/hello.om
 ```sh
 om run   file.om          # compile and run
 om build file.om -o app   # compile to a native executable
-om check file.om          # parse and type-check only
+om check file.om          # every error, with codes and fixes (--brief, --json)
+om fix   file.om          # apply the safe fixes until the file is clean
+om test  file.om          # run fn test_*(), cached, only failures printed
+om fmt   file.om          # canonical layout
+om doc   Vec              # real signatures; `om doc` lists everything
+om audit file.om          # which functions print or may panic
+om watch file.om          # re-check on every save
+om guide                  # the whole language on one page, for AI agents
 ```
+
+### Built for AI agents
+
+Om is designed so a model that has never seen it can write correct code on the
+first or second try. `om guide` prints the whole language in under 4,000
+tokens. Errors have stable codes and come with fixes marked `auto`, `maybe` or
+`placeholder`; `OM_AGENT=1` switches to one line per error:
+
+```text
+E0600 app.om:3:5 cannot assign twice to `x`; declare it with `let mut x`
+  fix[auto] 2:9 +"mut "
+```
+
+`om fix` applies the safe ones, `om doc` answers "what is the real
+signature?" instead of guessing, and `om test` prints only what failed.
 
 Errors point at the exact source:
 

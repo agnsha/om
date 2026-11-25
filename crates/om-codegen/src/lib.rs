@@ -4121,8 +4121,13 @@ impl<'a> Lower<'a> {
             }
         }
         let ps = &def.f.params;
-        // Bind type variables from the type the caller expects back.
-        if let (Some(rt), Some(exp)) = (&def.f.ret, expected) {
+        // Bind type variables from the type the caller expects back. A `Self`
+        // return is the impl's type: `let s: Stack[str] = Stack::new()`.
+        let ret_te = match (&def.f.ret, &def.impl_ty) {
+            (Some(r), Some(it)) if r.name == "Self" && r.args.is_empty() => Some(it.clone()),
+            (r, _) => r.clone(),
+        };
+        if let (Some(rt), Some(exp)) = (&ret_te, expected) {
             let mut trial = subst.clone();
             if self.cg.unify(rt, exp, &vars, &mut trial) {
                 subst = trial;

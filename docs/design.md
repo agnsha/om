@@ -59,13 +59,19 @@ already proven. Shipped in phase 0.5:
 | String interpolation of any expression | Python, Kotlin, Swift, JS | Only plain variable names in `format!` |
 | `defer` | Zig, Go, Swift | No; `Drop` types or scope-guard crates |
 
+Shipped with the agent tooling:
+
+| Feature | From | Rust today |
+|---|---|---|
+| Effects: `uses io`, `uses panic`, checked through calls, listed by `om audit` | Koka, Unison | No |
+| Built-in tests `fn test_*()` with `om test`, cached by content hash | Zig, Go | `#[test]`, no result cache |
+| Stable error codes with machine-applicable fixes, `om fix` | rustfix | Partly, for some lints |
+
 Planned, as the type system grows:
 
 | Feature | From | Phase |
 |---|---|---|
-| Compile-time function execution (`comptime`) without const-fn limits | Zig | 3 |
 | Union and intersection error types, `catch` with exhaustive handling | Zig, TypeScript | 3 |
-| Built-in test blocks (`test "name" { ... }`) and `om test` | Zig, D | 4 |
 | Regions (named arenas) as a language feature | Cyclone, Vale | 4 |
 | Structured concurrency with task groups | Swift, Kotlin, Trio | 6 |
 | Hot reload of functions in dev builds (Cranelift JIT) | Erlang, Dart | 6 |
@@ -154,6 +160,25 @@ fn main() {
 - Small static binaries for containers.
 - Structured concurrency: a task group per request.
 - C interop for OpenSSL, SQLite and other existing libraries.
+
+## Principles for tools and agents
+
+- **No code runs at build time.** Om has no macros, build scripts, procedural
+  derives, compile-time file includes or compile-time evaluation of user
+  functions. Compiling an untrusted file can fail, but it cannot read files,
+  open sockets or run commands. (Rust's `build.rs` and proc macros can.)
+- **Every line is checked.** There is no conditional compilation, so no
+  feature or platform variant hides code from the checker. Generic functions
+  are checked when they are used; one that is never called gets warning W0100.
+- **Hostile input fails fast.** Source files are capped at 16 MiB, nesting at
+  256 levels, types at 1024 scalar values and 64 levels, generic instances at
+  20,000 and errors at 400 per run. A fuzz test feeds the compiler thousands of
+  mutated programs.
+- **Programs fail loudly, not silently.** Overflow, out-of-range indexes and
+  impossible allocation sizes panic with exit code 101 in every build.
+- **Errors are data.** Every message has a stable code, a one-line `--brief`
+  form and a JSON form, and fixes are labelled `auto`, `maybe` or
+  `placeholder` so tools know which ones are safe to apply.
 
 ## Compiler
 

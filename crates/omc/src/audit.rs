@@ -166,7 +166,7 @@ fn join<'a>(items: impl Iterator<Item = &'a str>) -> String {
 /// The `om audit` report for a program.
 pub fn report(p: &Program, file: &str, as_json: bool) -> String {
     let fns = infer(p);
-    let runtime = "C runtime: stdio output, exit, libm math";
+    let runtime = "C runtime: malloc/realloc/free, stdio output, exit, libm math";
     if as_json {
         let items = fns.values().map(|f| {
             let mut o = json::Obj::new().str("fn", &f.key).raw("effects", &json::strings(f.effects.iter().copied()));
@@ -195,7 +195,7 @@ pub fn report(p: &Program, file: &str, as_json: bool) -> String {
         };
         out.push_str(&format!("  {:width$}  {eff}{decl}\n", f.key));
     }
-    out.push_str("unsafe code: none (Om has no `unsafe`)\n");
+    out.push_str("unsafe code: none in this file (raw memory is used only inside the bundled Vec, String and Box)\n");
     out.push_str("code run at build time: none (no build scripts, macros or compile-time evaluation)\n");
     out.push_str("dependencies: none (one file; the prelude ships with the compiler)\n");
     out.push_str(&format!("foreign code: the {runtime}\n"));
