@@ -255,6 +255,7 @@ impl TempDir {
         let mut last = None;
         for _ in 0..16 {
             let dir = base.join(format!("om-{}-{:016x}", std::process::id(), random_u64()));
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
