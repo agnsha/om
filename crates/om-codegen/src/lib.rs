@@ -479,6 +479,7 @@ fn compile_inner(
         origins: HashMap::new(),
         glue_origins: HashMap::new(),
         cur_origin: None,
+        user_fn_span: None,
         needs_drop_cache: Default::default(),
     };
 
@@ -562,6 +563,7 @@ fn compile_inner(
     loop {
         let (r, what) = if let Some((inst, key, subst)) = cg.queue.pop() {
             cg.cur_origin = if cg.defs[&key].prelude { cg.origins.get(&inst).copied() } else { None };
+            cg.user_fn_span = if cg.defs[&key].prelude { None } else { Some(cg.defs[&key].f.span) };
             (cg.define(&inst, &key, subst, &mut ctx, &mut fctx), format!("inside the library's `{key}`"))
         } else if let Some((id, ty, kind)) = cg.glue_queue.pop() {
             cg.cur_origin = cg.glue_origins.get(&id).copied();
@@ -636,6 +638,8 @@ struct Codegen {
     glue_origins: HashMap<FuncId, Span>,
     /// The user's line responsible for the library code being compiled now.
     cur_origin: Option<Span>,
+    /// The user function being compiled now, if any.
+    user_fn_span: Option<Span>,
     needs_drop_cache: std::cell::RefCell<HashMap<Ty, bool>>,
 }
 
@@ -1114,7 +1118,8 @@ impl Codegen {
         let name = format!("om_{what}_{}", self.glue.len());
         let id = self.module.declare_function(&name, Linkage::Local, &sig).map_err(internal)?;
         self.glue.insert((ty.clone(), kind), id);
-        if let Some(o) = self.cur_origin {
+        // Glue needed by user code points at the user function that needed it.
+        if let Some(o) = self.cur_origin.or(self.user_fn_span) {
             self.glue_origins.insert(id, o);
         }
         self.glue_queue.push((id, ty.clone(), kind));
@@ -1250,7 +1255,7 @@ impl Codegen {
             None => Ty::Unit,
         };
         for t in params.iter().map(|p| &p.ty).chain([&ret]) {
-            self.check_size(t, f.span)?;
+            self.check_size(t, span)?;
         }
         let is_main = inst == "main";
         if is_main && !matches!(ret, Ty::Unit | Ty::I64) {

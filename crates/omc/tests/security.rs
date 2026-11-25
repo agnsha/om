@@ -28,11 +28,77 @@ impl Rng {
 
 /// Snippets that tend to confuse lexers and parsers.
 const NASTY: &[&str] = &[
-    "{", "}", "(", ")", "[", "]", "\"", "'", "\\", "<", ">", "::", "!", "#[", "#![", "fn", "let", "mut", "match", "=>",
-    "->", "|>", "..=", "?", "&mut", "&", "*", "0xFFFFFFFFFFFFFFFFFFFF", "1e999", "'a", "'outer:", "/*", "*/", "//",
-    "\n", "\u{0}", "é", "\u{202e}", "{{", "}}", "\"{", "}\"", "uses", "intrinsic::ptr_alloc(1)", "Self", "self",
-    "impl", "trait", "enum", "struct", "const", "defer", "break", "return", "loop {}", ";", ",", "=", "+", "-", "%",
-    "<<", ">>", "as", "Vec[", "Box::new(", "String::from(", "[0; 99999999999]", ".0.0.0", "\t", "\r\n",
+    "{",
+    "}",
+    "(",
+    ")",
+    "[",
+    "]",
+    "\"",
+    "'",
+    "\\",
+    "<",
+    ">",
+    "::",
+    "!",
+    "#[",
+    "#![",
+    "fn",
+    "let",
+    "mut",
+    "match",
+    "=>",
+    "->",
+    "|>",
+    "..=",
+    "?",
+    "&mut",
+    "&",
+    "*",
+    "0xFFFFFFFFFFFFFFFFFFFF",
+    "1e999",
+    "'a",
+    "'outer:",
+    "/*",
+    "*/",
+    "//",
+    "\n",
+    "\u{0}",
+    "é",
+    "\u{202e}",
+    "{{",
+    "}}",
+    "\"{",
+    "}\"",
+    "uses",
+    "intrinsic::ptr_alloc(1)",
+    "Self",
+    "self",
+    "impl",
+    "trait",
+    "enum",
+    "struct",
+    "const",
+    "defer",
+    "break",
+    "return",
+    "loop {}",
+    ";",
+    ",",
+    "=",
+    "+",
+    "-",
+    "%",
+    "<<",
+    ">>",
+    "as",
+    "Vec[",
+    "Box::new(",
+    "String::from(",
+    "[0; 99999999999]",
+    ".0.0.0",
+    "\t",
+    "\r\n",
 ];
 
 fn char_boundary(s: &str, mut i: usize) -> usize {
@@ -69,6 +135,7 @@ fn mutate(src: &str, rng: &mut Rng) -> String {
 fn exercise(src: &str) {
     let diags = omc::check(src);
     for d in &diags {
+        assert!(d.span.is_none_or(|s| s.start <= s.end && s.end <= src.len()), "span outside the file: {d:?}");
         let _ = render::human(d, "fuzz.om", src);
         let _ = render::brief(d, "fuzz.om", src);
         let _ = render::json(d, "fuzz.om", src);
@@ -104,7 +171,10 @@ fn mutated_programs_never_crash_the_compiler() {
             let start = Instant::now();
             let r = catch_unwind(AssertUnwindSafe(|| exercise(&m)));
             assert!(r.is_ok(), "the compiler crashed on a mutant of {name}:\n{m}");
-            assert!(start.elapsed() < Duration::from_secs(20), "the compiler took too long on a mutant of {name}:\n{m}");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "the compiler took too long on a mutant of {name}:\n{m}"
+            );
             n += 1;
         }
     }
@@ -120,12 +190,21 @@ fn pathological_sources_fail_fast_with_a_code() {
     let unary = format!("fn main() {{ print({}1) }}", "-".repeat(100_000));
     let methods = format!("fn main() {{ print(1{}) }}", ".abs()".repeat(100_000));
     let interp = format!("fn main() {{ print(\"{{{}1{}}}\") }}", "(".repeat(100_000), ")".repeat(100_000));
-    let errors = (0..5_000).map(|i| format!("fn f{i}() {{ let x: i64 = \"a\" }}\n")).collect::<String>() + "fn main() {}\n";
+    let errors =
+        (0..5_000).map(|i| format!("fn f{i}() {{ let x: i64 = \"a\" }}\n")).collect::<String>() + "fn main() {}\n";
     let wide = (0..40)
-        .map(|i| if i == 0 { "struct A0 { a: i64, b: i64 }\n".to_string() } else { format!("struct A{i} {{ a: A{}, b: A{} }}\n", i - 1, i - 1) })
+        .map(|i| {
+            if i == 0 {
+                "struct A0 { a: i64, b: i64 }\n".to_string()
+            } else {
+                format!("struct A{i} {{ a: A{}, b: A{} }}\n", i - 1, i - 1)
+            }
+        })
         .collect::<String>()
         + "fn main() { let x: A39 = A39::default() }\n";
-    let generic_bomb = "fn f[T](x: T, n: i64) -> i64 { if n == 0 { 0 } else { f((x, x), n - 1) } }\nfn main() { print(f(1, 64)) }\n";
+    let poly = "fn grow[T](x: T, n: i64) { if n > 0 { grow(Box::new(x), n - 1) } }\nfn main() { grow(1, 3) }\n";
+    let generic_bomb =
+        "fn f[T](x: T, n: i64) -> i64 { if n == 0 { 0 } else { f((x, x), n - 1) } }\nfn main() { print(f(1, 64)) }\n";
     let cases: Vec<(&str, String, &str)> = vec![
         ("deep parens", deep_parens, "E0108"),
         ("deep blocks", deep_blocks, "E0108"),
@@ -137,15 +216,20 @@ fn pathological_sources_fail_fast_with_a_code() {
         ("many errors", errors, "E0301"),
         ("wide struct", wide, ""),
         ("generic bomb", generic_bomb.to_string(), "E0312"),
+        ("polymorphic recursion", poly.to_string(), "E0312"),
     ];
     for (what, src, code) in cases {
         let start = Instant::now();
-        let d = catch_unwind(AssertUnwindSafe(|| omc::check(&src))).unwrap_or_else(|_| panic!("{what}: compiler crashed"));
+        let d =
+            catch_unwind(AssertUnwindSafe(|| omc::check(&src))).unwrap_or_else(|_| panic!("{what}: compiler crashed"));
         assert!(start.elapsed() < Duration::from_secs(30), "{what}: took {:?}", start.elapsed());
         assert!(d.iter().any(|d| d.is_error()), "{what}: no error");
         assert!(d.len() <= 400, "{what}: {} diagnostics", d.len());
         if !code.is_empty() {
             assert!(d.iter().any(|x| x.code == code), "{what}: expected {code}, got {:?}", d.first());
+        }
+        for x in &d {
+            assert!(x.span.is_none_or(|s| s.end <= src.len()), "{what}: span outside the file: {x:?}");
         }
     }
 }
