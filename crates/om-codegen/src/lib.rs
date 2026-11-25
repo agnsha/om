@@ -3951,6 +3951,11 @@ impl<'a> Lower<'a> {
                 let ok = self.rt("om_rt_read_line_ok", &[], Some(types::I8), &[])?.unwrap();
                 return Ok((vec![ok], Ty::Bool));
             }
+            ("key_down", [k]) => {
+                let (v, _) = self.expr_expect(&k.value, Some(&Ty::Int(IntTy::I64)))?;
+                let r = self.rt("om_rt_key_down", &[types::I64], Some(types::I64), &v)?.unwrap();
+                return Ok((vec![r], Ty::Int(IntTy::I64)));
+            }
             ("poll_key", []) => {
                 let k = self.rt("om_rt_poll_key", &[], Some(types::I64), &[])?.unwrap();
                 return Ok((vec![k], Ty::Int(IntTy::I64)));
@@ -5524,6 +5529,22 @@ static int om_console_size(int rows) {
 long long om_rt_term_cols(void) { return om_console_size(0); }
 long long om_rt_term_rows(void) { return om_console_size(1); }
 static void om_cooked_input(void) {}
+/* Is a key held down right now? 1 or 0; -1 when this cannot be known. */
+#ifdef _MSC_VER
+#pragma comment(lib, "user32.lib")
+#endif
+long long om_rt_key_down(long long k) {
+    if (!_isatty(_fileno(stdin))) return -1;
+    int vk = 0;
+    if (k >= 1000 && k <= 1003) { static const int arrows[4] = { VK_UP, VK_DOWN, VK_RIGHT, VK_LEFT }; vk = arrows[k - 1000]; }
+    else if (k >= 'a' && k <= 'z') vk = (int)k - 32;
+    else if ((k >= 'A' && k <= 'Z') || (k >= '0' && k <= '9')) vk = (int)k;
+    else if (k == ' ') vk = VK_SPACE;
+    else if (k == 27) vk = VK_ESCAPE;
+    else if (k == '\n') vk = VK_RETURN;
+    if (!vk) return -1;
+    return (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+}
 #else
 static struct termios om_saved_tty_;
 static int om_tty_raw_;
@@ -5580,6 +5601,8 @@ static int om_term_size(int rows) {
 }
 long long om_rt_term_cols(void) { return om_term_size(0); }
 long long om_rt_term_rows(void) { return om_term_size(1); }
+/* Terminals on Linux and macOS only report key presses, not releases. */
+long long om_rt_key_down(long long k) { (void)k; return -1; }
 long long om_rt_read_key(void) {
     fflush(stdout);
     om_enter_raw();

@@ -525,6 +525,7 @@ cost a round trip. All of them do what the code obviously means.
 | `time_ns()` | Nanoseconds since 1970, as an `i64` (for timing and random seeds) |
 | `sleep_ms(ms)` | Flushes output and pauses for `ms` milliseconds |
 | `poll_key()` | Like `read_key()` but never waits: `0` when no key is waiting. For real-time programs that check keys once per frame. |
+| `key_down(k)` | Whether key `k` (numbered as `read_key` numbers it) is held right now: `1`, `0`, or `-1` when the platform cannot tell. Windows consoles can tell; Linux and macOS terminals only report presses. |
 | `term_cols()`, `term_rows()` | The terminal's size in characters (80 and 24 if unknown) |
 | `flush()` | Writes out everything printed so far (output is buffered) |
 | `read_line()` | One line of input as `Option[String]`, without its line ending; `None` at the end of input |

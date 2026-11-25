@@ -799,6 +799,12 @@ fn sleep_ms(ms: i64) { intrinsic::sleep_ms(ms) }
 // real-time programs such as games, which check for keys once per frame.
 fn poll_key() -> i64 { intrinsic::poll_key() }
 
+// Is key `k` (as read_key numbers it: 'w' as i64, 1000..=1003 for arrows,
+// ' ' as i64, 27 for Esc) held down right now? 1 yes, 0 no, -1 when the
+// platform cannot tell (terminals on Linux and macOS report presses only, so
+// use poll_key there). Windows consoles can tell, which makes movement smooth.
+fn key_down(k: i64) -> i64 { intrinsic::key_down(k) }
+
 // The terminal's size in characters (80 x 24 when it cannot be found).
 fn term_cols() -> i64 { intrinsic::term_cols() }
 fn term_rows() -> i64 { intrinsic::term_rows() }
