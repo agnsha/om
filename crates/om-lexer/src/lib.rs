@@ -502,10 +502,21 @@ impl<'a> Lexer<'a> {
                             None | Some(b'\n') => {
                                 return self.err("unterminated `{` in string interpolation", code_start - 1)
                             }
-                            Some(b'"') => return self.err(
-                                "unterminated `{` in string interpolation (strings cannot be nested inside `{...}`)",
-                                code_start - 1,
-                            ),
+                            Some(b'"') => {
+                                // A string inside `{...}`, as in `"{name.replace("a", "b")}"`:
+                                // skip to its closing quote.
+                                self.pos += 1;
+                                loop {
+                                    match self.peek(0) {
+                                        None | Some(b'\n') => {
+                                            return self.err("unterminated string inside `{...}`", code_start - 1)
+                                        }
+                                        Some(b'\\') => self.pos += 2,
+                                        Some(b'"') => break,
+                                        _ => self.pos += 1,
+                                    }
+                                }
+                            }
                             Some(b'{') => depth += 1,
                             Some(b'}') => {
                                 depth -= 1;
@@ -708,6 +719,17 @@ mod tests {
             ]
         );
         assert_eq!(kinds(r#""{{x}}""#), vec![Str("{x}".into()), Eof]);
+        assert_eq!(
+            kinds(r#""a{f("}", "\"")}b""#),
+            vec![
+                InterpStr(vec![
+                    StrPart::Lit("a".into()),
+                    StrPart::Code(r#"f("}", "\"")"#.into(), 3),
+                    StrPart::Lit("b".into())
+                ]),
+                Eof
+            ]
+        );
         assert!(lex(r#""{}""#).unwrap_err().message.contains("empty"));
         assert!(lex(r#""{x""#).unwrap_err().message.contains("unterminated"));
     }

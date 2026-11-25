@@ -338,6 +338,86 @@ fn uint_cc(op: BinOp) -> IntCC {
 }
 
 /// A plain or suffixed integer literal: its value, and its suffix type if any.
+/// Call `f` on `e` and every expression inside it.
+fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    match &e.kind {
+        ExprKind::Unary(_, x)
+        | ExprKind::Field(x, _)
+        | ExprKind::Ref(_, x)
+        | ExprKind::Try(x)
+        | ExprKind::Cast(x, _) => walk_expr(x, f),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) | ExprKind::ListRepeat(a, b) => {
+            walk_expr(a, f);
+            walk_expr(b, f);
+        }
+        ExprKind::Call(_, args) => args.iter().for_each(|a| walk_expr(&a.value, f)),
+        ExprKind::MethodCall(r, _, args) => {
+            walk_expr(r, f);
+            args.iter().for_each(|a| walk_expr(&a.value, f));
+        }
+        ExprKind::StructLit(_, fs) => fs.iter().for_each(|(_, x)| walk_expr(x, f)),
+        ExprKind::Tuple(xs) | ExprKind::List(xs) => xs.iter().for_each(|x| walk_expr(x, f)),
+        ExprKind::Interp(parts) => parts.iter().for_each(|p| {
+            if let InterpPart::Expr(x) = p {
+                walk_expr(x, f)
+            }
+        }),
+        ExprKind::If(c, a, b) => {
+            walk_expr(c, f);
+            walk_block(a, f);
+            if let Some(b) = b {
+                walk_block(b, f);
+            }
+        }
+        ExprKind::Match(x, arms) => {
+            walk_expr(x, f);
+            for a in arms {
+                if let Some(g) = &a.guard {
+                    walk_expr(g, f);
+                }
+                walk_expr(&a.body, f);
+            }
+        }
+        ExprKind::Loop(b, _) | ExprKind::Block(b) => walk_block(b, f),
+        _ => {}
+    }
+}
+
+fn walk_block(b: &Block, f: &mut dyn FnMut(&Expr)) {
+    b.stmts.iter().for_each(|s| walk_stmt(s, f));
+    if let Some(t) = &b.tail {
+        walk_expr(t, f);
+    }
+}
+
+fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    match s {
+        Stmt::Let { value, .. } => walk_expr(value, f),
+        Stmt::Assign { target, value, .. } => {
+            walk_expr(target, f);
+            walk_expr(value, f);
+        }
+        Stmt::While { cond, body, .. } => {
+            walk_expr(cond, f);
+            walk_block(body, f);
+        }
+        Stmt::For { start, end, body, .. } => {
+            walk_expr(start, f);
+            walk_expr(end, f);
+            walk_block(body, f);
+        }
+        Stmt::ForEach { iter, body, .. } => {
+            walk_expr(iter, f);
+            walk_block(body, f);
+        }
+        Stmt::Return { value: Some(v), .. } | Stmt::Break { value: Some(v), .. } => walk_expr(v, f),
+        Stmt::Defer { body, .. } => walk_expr(body, f),
+        Stmt::Expr(e) => walk_expr(e, f),
+        _ => {}
+    }
+}
+
 fn literal_int(e: &Expr) -> Option<(i128, Option<&TypeExpr>)> {
     match &e.kind {
         ExprKind::Int(n) => Some((*n, None)),
@@ -595,7 +675,7 @@ fn is_string(ty: &Ty) -> bool {
 
 const PRIVATE_STRUCTS: &[&str] = &["Vec", "String", "Box"];
 
-const BUILTINS: &[&str] = &["print", "panic", "assert"];
+const BUILTINS: &[&str] = &["print", "eprint", "panic", "assert"];
 
 impl Codegen {
     fn add_def(&mut self, key: String, def: FnDef, span: Span) -> CResult<()> {
@@ -1018,6 +1098,9 @@ impl Codegen {
             }
         }
         if is_main {
+            // C's `int main(int argc, char **argv)`; the runtime keeps them for `args()`.
+            sig.params.push(AbiParam::new(types::I32));
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I32));
             return sig;
         }
@@ -1154,6 +1237,10 @@ impl Codegen {
 
         let inouts = params.iter().filter(|p| p.2 == ParamMode::RefMut).map(|p| p.0.clone()).collect();
         let mut lw = Lower::new(self, b, ret.clone(), is_main, subst, inouts, def.prelude);
+        if is_main {
+            let (argc, argv) = (entry_vals[0], entry_vals[1]);
+            lw.rt("om_rt_set_args", &[types::I32, types::I64], None, &[argc, argv])?;
+        }
         let mut next = 0;
         for ((pname, pty, mode), p) in params.iter().zip(&f.params) {
             let n = lw.cg.width(pty);
@@ -1390,6 +1477,8 @@ struct Place {
 struct Lower<'a> {
     cg: &'a mut Codegen,
     b: FunctionBuilder<'a>,
+    /// The inferred type for the next `let` (see `infer_empty_vec`).
+    let_hint: Option<Ty>,
     locals: Vec<Local>,
     scopes: Vec<Scope>,
     /// Locals whose value has been moved out, with where it happened.
@@ -1437,6 +1526,7 @@ impl<'a> Lower<'a> {
             loops: vec![],
             ret,
             is_main,
+            let_hint: None,
             dead: false,
             subst,
             inouts,
@@ -1657,7 +1747,16 @@ impl<'a> Lower<'a> {
                 let Some(p) = self.place(inner)? else { return Ok(None) };
                 match self.box_elem(&p.ty) {
                     Some(_) => Ok(Some(self.deref_place(p))),
-                    None => err(format!("cannot dereference {}", p.ty), e.span),
+                    // Om references are not pointers: `*x` on a plain value (a loop
+                    // variable from `for x in &list`, a `&` parameter) is just `x`.
+                    None if !self.cg.needs_drop(&p.ty) => Ok(Some(p)),
+                    None => err(
+                        format!(
+                            "cannot dereference {}; Om references are not pointers, so write the name without `*`",
+                            p.ty
+                        ),
+                        e.span,
+                    ),
                 }
             }
             ExprKind::Field(inner, f) => {
@@ -1823,9 +1922,14 @@ impl<'a> Lower<'a> {
     }
 
     /// Jump to `m` carrying `vals` of type `ty`, checking it agrees with earlier branches.
-    fn jump_to(&mut self, m: &mut Merge, ty: Ty, vals: Vals, what: &str, span: Span) -> CResult<()> {
+    fn jump_to(&mut self, m: &mut Merge, mut ty: Ty, mut vals: Vals, what: &str, span: Span) -> CResult<()> {
         if ty == Ty::Never {
             return Ok(());
+        }
+        if ty == Ty::Str && m.ty.as_ref().is_some_and(is_string) {
+            // One branch built a String and this one gives a `str`: copy it.
+            vals = self.str_to_string(&vals)?;
+            ty = string_ty();
         }
         match &m.ty {
             None => {
@@ -1898,8 +2002,9 @@ impl<'a> Lower<'a> {
 
     fn block_inner(&mut self, blk: &Block, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
         let fn_body = std::mem::take(&mut self.fn_body);
-        for s in &blk.stmts {
+        for (k, s) in blk.stmts.iter().enumerate() {
             let mark = self.temps.len();
+            self.let_hint = self.infer_empty_vec(s, &blk.stmts[k + 1..], blk.tail.as_deref());
             self.stmt(s)?;
             self.drop_temps(mark)?;
         }
@@ -1956,14 +2061,115 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// `let mut v = Vec::new()` with no annotation: find the type from the first
+    /// later `v.push(x)` / `v.insert(i, x)` whose `x` has an obvious type.
+    fn infer_empty_vec(&self, s: &Stmt, rest: &[Stmt], tail: Option<&Expr>) -> Option<Ty> {
+        let Stmt::Let { pat, ty: None, value, .. } = s else { return None };
+        let PatKind::Bind(name, _) = &pat.kind else { return None };
+        let ExprKind::Call(f, _) = &value.kind else { return None };
+        if f != "Vec::new" && f != "Vec::with_capacity" {
+            return None;
+        }
+        let mut found = None;
+        for st in rest {
+            walk_stmt(st, &mut |e| {
+                if found.is_some() {
+                    return;
+                }
+                if let ExprKind::MethodCall(recv, m, args) = &e.kind {
+                    if matches!(&recv.kind, ExprKind::Var(v) if v == name) && (m == "push" || m == "insert") {
+                        found = args.last().and_then(|a| self.guess_type(&a.value, rest));
+                    }
+                }
+            });
+        }
+        if found.is_none() {
+            if let Some(t) = tail {
+                walk_expr(t, &mut |e| {
+                    if let ExprKind::MethodCall(recv, m, args) = &e.kind {
+                        if found.is_none()
+                            && matches!(&recv.kind, ExprKind::Var(v) if v == name)
+                            && (m == "push" || m == "insert")
+                        {
+                            found = args.last().and_then(|a| self.guess_type(&a.value, rest));
+                        }
+                    }
+                });
+            }
+        }
+        found.map(|t| Ty::Struct("Vec".into(), vec![t]))
+    }
+
+    /// The type of `e` when it is obvious without compiling it: literals, known
+    /// variables, struct literals, casts and calls to non-generic functions.
+    fn guess_type(&self, e: &Expr, later: &[Stmt]) -> Option<Ty> {
+        match &e.kind {
+            ExprKind::Int(_) => Some(Ty::I64),
+            ExprKind::Float(_) => Some(Ty::F64),
+            ExprKind::Bool(_) => Some(Ty::Bool),
+            ExprKind::Char(_) => Some(Ty::Char),
+            ExprKind::Str(_) => Some(Ty::Str),
+            ExprKind::Interp(_) => Some(string_ty()),
+            ExprKind::Var(v) => match self.lookup_id(v) {
+                Some(id) => Some(self.locals[id].ty.clone()),
+                // Declared later in the block: use its `let`.
+                None => later.iter().find_map(|st| match st {
+                    Stmt::Let { pat: Pattern { kind: PatKind::Bind(n, _), .. }, ty, value, .. } if n == v => match ty {
+                        Some(t) => self.resolve(t).ok(),
+                        None => self.guess_type(value, &[]),
+                    },
+                    _ => None,
+                }),
+            },
+            ExprKind::Cast(_, t) => self.resolve(t).ok(),
+            ExprKind::Unary(UnOp::Neg, x) => self.guess_type(x, later),
+            ExprKind::Binary(op, l, _)
+                if !matches!(
+                    op,
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or
+                ) =>
+            {
+                self.guess_type(l, later)
+            }
+            ExprKind::Binary(..) => Some(Ty::Bool),
+            ExprKind::Tuple(es) => {
+                es.iter().map(|x| self.guess_type(x, later)).collect::<Option<Vec<_>>>().map(Ty::Tuple)
+            }
+            ExprKind::List(es) => {
+                es.first().and_then(|x| self.guess_type(x, later)).map(|t| Ty::Struct("Vec".into(), vec![t]))
+            }
+            ExprKind::StructLit(n, _) => match self.cg.structs.get(n) {
+                Some((g, _)) if g.is_empty() => Some(Ty::Struct(n.clone(), vec![])),
+                _ => None,
+            },
+            ExprKind::MethodCall(_, m, _) if m == "to_string" => Some(string_ty()),
+            ExprKind::Call(f, _) => {
+                if f == "String::from" || f == "String::new" {
+                    return Some(string_ty());
+                }
+                let def = self.cg.defs.get(f)?;
+                if !def.f.generics.is_empty() || !def.impl_generics.is_empty() {
+                    return None;
+                }
+                match &def.f.ret {
+                    Some(t) if t.name != "Self" => self.resolve(t).ok(),
+                    Some(_) => def.impl_ty.as_ref().and_then(|t| self.resolve(t).ok()),
+                    None => Some(Ty::Unit),
+                }
+            }
+            _ => None,
+        }
+    }
+
     // ---------- statements ----------
 
     fn stmt(&mut self, s: &Stmt) -> CResult<()> {
         match s {
             Stmt::Let { pat, ty, value, span } => {
+                let hint = self.let_hint.take();
                 let want = match ty {
                     Some(t) => Some(self.resolve(t)?),
-                    None => None,
+                    None => hint,
                 };
                 // `let x = &temporary` keeps the temporary alive for the whole block, as in
                 // Rust: `x` simply owns it.
@@ -2235,7 +2441,7 @@ impl<'a> Lower<'a> {
             break_moved: HashMap::new(),
         });
         let r = self.block_expect(body, None);
-        let (_, ty) = match r {
+        let (vals, ty) = match r {
             Ok(x) => x,
             Err(e) => {
                 self.loops.pop();
@@ -2243,9 +2449,13 @@ impl<'a> Lower<'a> {
             }
         };
         if !self.dead {
+            // A value left at the end of a loop body is unused: drop it, as Rust
+            // does for `expr;` (`for _ in 0..4 { rng.next() }` is fine).
             if ty != Ty::Unit {
-                self.loops.pop();
-                return err(format!("a loop body must not produce a value, but this one gives {ty}"), body.span);
+                if let Err(e) = self.drop_value(&vals, &ty) {
+                    self.loops.pop();
+                    return Err(e);
+                }
             }
             let idx = self.loops.len() - 1;
             if let Err(e) = self.check_loop_moves(idx) {
@@ -2409,7 +2619,28 @@ impl<'a> Lower<'a> {
 
     /// Lower `e`. `expected` is the type the context wants, if known; it is a hint
     /// for inferring type arguments (as in `let x: Option[i64] = None`), not a check.
+    /// Lower `e`, where `expected` (if known) is the type the context wants. A `str`
+    /// where a `String` is expected becomes an owned copy, so `name = "Om"` and
+    /// `f("text")` work for `String` places and parameters.
     fn expr_expect(&mut self, e: &Expr, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
+        let (v, t) = self.expr_expect_raw(e, expected)?;
+        if t == Ty::Str && expected.is_some_and(is_string) && !self.dead {
+            return Ok((self.str_to_string(&v)?, string_ty()));
+        }
+        Ok((v, t))
+    }
+
+    /// A new String holding a copy of the `str` `v`.
+    fn str_to_string(&mut self, v: &[Value]) -> CResult<Vals> {
+        let (ptr, len) = (v[0], v[1]);
+        let saved = self.stderr;
+        self.stderr = false;
+        let r = self.capture(|s| s.write_bytes(ptr, len));
+        self.stderr = saved;
+        Ok(r?.0)
+    }
+
+    fn expr_expect_raw(&mut self, e: &Expr, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
         match &e.kind {
             ExprKind::Int(n) => {
                 let t = match expected {
@@ -2864,6 +3095,34 @@ impl<'a> Lower<'a> {
         Ok(Arg { name: None, value, span })
     }
 
+    /// Field-by-field equality for a tuple, a plain struct, or an enum whose
+    /// variants carry no data. `None` if the type is not one of those.
+    fn structural_eq(&mut self, lv: &[Value], rv: &[Value], ty: &Ty, span: Span) -> CResult<Option<Value>> {
+        let members: Vec<Ty> = match ty {
+            Ty::Tuple(ts) => ts.clone(),
+            Ty::Struct(n, _) if !PRIVATE_STRUCTS.contains(&n.as_str()) => {
+                self.cg.fields(ty).into_iter().map(|(_, t)| t).collect()
+            }
+            Ty::Enum(..) if self.cg.variants(ty).iter().all(|(_, fs)| fs.is_empty()) => {
+                return Ok(Some(self.b.ins().icmp(IntCC::Equal, lv[0], rv[0])));
+            }
+            _ => return Ok(None),
+        };
+        let mut acc = self.b.ins().iconst(types::I8, 1);
+        let mut off = 0;
+        for t in members {
+            let w = self.cg.width(&t);
+            let (v, vt) =
+                self.binop(BinOp::Eq, lv[off..off + w].to_vec(), t.clone(), rv[off..off + w].to_vec(), t, span)?;
+            if vt != Ty::Bool || v.is_empty() {
+                return Ok(None);
+            }
+            acc = self.b.ins().band(acc, v[0]);
+            off += w;
+        }
+        Ok(Some(acc))
+    }
+
     /// An operator on a user type, through the trait that defines it (`Add`, `Eq`, `Ord`, ...).
     fn overloaded(&mut self, op: BinOp, lv: Vals, ty: Ty, rv: Vals, span: Span) -> CResult<(Vals, Ty)> {
         let (tr, m, by_ref) = match op {
@@ -2879,6 +3138,15 @@ impl<'a> Lower<'a> {
                 return err(format!("operator `{}` is not defined for {ty}", op.symbol()), span)
             }
         };
+        let has_eq_impl = ty.key().is_some_and(|k| self.cg.defs.contains_key(&format!("{k}::eq")));
+        if tr == "Eq" && !has_eq_impl {
+            // No `Eq` impl: compare tuples and structs field by field, and
+            // enums without payloads by variant, like Rust's `#[derive(PartialEq)]`.
+            if let Some(eq) = self.structural_eq(&lv, &rv, &ty, span)? {
+                let out = if op == BinOp::Ne { self.b.ins().bxor_imm_u(eq, 1) } else { eq };
+                return Ok((vec![out], Ty::Bool));
+            }
+        }
         if !self.cg.implements(&ty, tr) {
             return err(format!("operator `{}` is not defined for {ty}; implement `{tr}` for it", op.symbol()), span);
         }
@@ -2984,6 +3252,12 @@ impl<'a> Lower<'a> {
         span: Span,
         expected: Option<&Ty>,
     ) -> CResult<(Vals, Ty)> {
+        // `if a { "{x} items" } else { "none" }`: one branch is an interpolated
+        // String, so the other's `str` becomes a String too.
+        let st = string_ty();
+        let interp = |b: &Block| matches!(b.tail.as_deref(), Some(Expr { kind: ExprKind::Interp(_), .. }));
+        let expected =
+            if expected.is_none() && (interp(then) || els.is_some_and(interp)) { Some(&st) } else { expected };
         let c = self.cond(cond)?;
         let then_blk = self.b.create_block();
         let else_blk = self.b.create_block();
@@ -2995,11 +3269,16 @@ impl<'a> Lower<'a> {
         self.b.seal_block(then_blk);
         self.dead = false;
         let before = self.moved.clone();
-        let (tv, tt) = self.block_expect(then, expected)?;
+        let (mut tv, mut tt) = self.block_expect(then, expected)?;
         let then_moved = (!self.dead).then(|| std::mem::replace(&mut self.moved, before.clone()));
         self.moved = before;
         if els.is_none() && tt != Ty::Unit && tt != Ty::Never {
-            return err(format!("`if` without `else` must not produce a value, but this one gives {tt}"), then.span);
+            // `if full { list.remove(0) }`: the value is unused, so drop it.
+            if !self.dead {
+                self.drop_value(&tv, &tt)?;
+            }
+            tv = vec![];
+            tt = Ty::Unit;
         }
         if !self.dead {
             self.jump_to(&mut m, tt, tv, "`if` and `else`", span)?;
@@ -3233,7 +3512,8 @@ impl<'a> Lower<'a> {
             return self.intrinsic(op, args, span, expected);
         }
         match name {
-            "print" => return self.print(args, span),
+            "print" => return self.print(args, span, false),
+            "eprint" => return self.print(args, span, true),
             "panic" => return self.panic(args, span),
             "assert" => return self.assert(args, span),
             _ => {}
@@ -3499,12 +3779,16 @@ impl<'a> Lower<'a> {
         };
         let usize_ty = Ty::Int(IntTy::Usize);
         let (iv, it) = self.expr_expect(idx, Some(&usize_ty))?;
-        if it != usize_ty {
-            return err(format!("list indexes must be usize, found {it}"), idx.span);
-        }
+        // Any integer type can index: a negative index is simply out of bounds
+        // (it becomes a huge unsigned number), so the one bounds check covers it.
+        let Ty::Int(ity) = it else {
+            return err(format!("list indexes must be integers, found {it}"), idx.span);
+        };
+        let shown_ty = if ity.signed() { Ty::Int(IntTy::I64) } else { usize_ty.clone() };
+        let iv0 = self.int_resize(iv[0], ity, if ity.signed() { IntTy::I64 } else { IntTy::Usize });
         let (_, buf_off) = self.cg.field(list_ty, "buf").unwrap();
         let (_, len_off) = self.cg.field(list_ty, "len").unwrap();
-        let (buf, len, i) = (list[buf_off], list[len_off], iv[0]);
+        let (buf, len, i) = (list[buf_off], list[len_off], iv0);
         let ok = self.b.ins().icmp(IntCC::UnsignedLessThan, i, len);
         let fail = self.b.create_block();
         let cont = self.b.create_block();
@@ -3515,7 +3799,7 @@ impl<'a> Lower<'a> {
         self.panic_with(
             vec![
                 (Some("index out of bounds: the len is "), Some((len, usize_ty.clone()))),
-                (Some(" but the index is "), Some((i, usize_ty))),
+                (Some(" but the index is "), Some((i, shown_ty))),
             ],
             span,
         )?;
@@ -3591,10 +3875,15 @@ impl<'a> Lower<'a> {
         let (v, elem) = self.expr_expect(value, hint.as_ref())?;
         let usize_ty = Ty::Int(IntTy::Usize);
         let (nv, nt) = self.expr_expect(count, Some(&usize_ty))?;
-        if nt != usize_ty {
-            return err(format!("the count in `[value; count]` must be usize, found {nt}"), count.span);
+        let Ty::Int(nty) = nt else {
+            return err(format!("the count in `[value; count]` must be an integer, found {nt}"), count.span);
+        };
+        // A negative count makes an empty list.
+        let mut n = self.int_resize(nv[0], nty, if nty.signed() { IntTy::I64 } else { IntTy::Usize });
+        if nty.signed() {
+            let zero = self.b.ins().iconst(types::I64, 0);
+            n = self.b.ins().smax(n, zero);
         }
-        let n = nv[0];
         let buf = self.alloc(n, &elem)?;
         // for i in 0..n: buf[i] = clone(value); the original value is moved into the last slot.
         let header = self.b.create_block();
@@ -3641,6 +3930,39 @@ impl<'a> Lower<'a> {
             ("read_key", []) => {
                 let k = self.rt("om_rt_read_key", &[], Some(types::I64), &[])?.unwrap();
                 return Ok((vec![k], Ty::Int(IntTy::I64)));
+            }
+            ("argc", []) => {
+                let n = self.rt("om_rt_argc", &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![n], Ty::Int(IntTy::I64)));
+            }
+            ("arg_ptr", [i]) | ("arg_len", [i]) => {
+                let (v, _) = self.expr_expect(&i.value, Some(&Ty::Int(IntTy::I64)))?;
+                let name = if op == "arg_ptr" { "om_rt_arg_ptr" } else { "om_rt_arg_len" };
+                let r = self.rt(name, &[types::I64], Some(types::I64), &v)?.unwrap();
+                let ty = if op == "arg_ptr" { Ty::Ptr(Box::new(Ty::Int(IntTy::U8))) } else { Ty::Int(IntTy::Usize) };
+                return Ok((vec![r], ty));
+            }
+            ("read_line", []) => {
+                let p = self.rt("om_rt_read_line", &[], Some(types::I64), &[])?.unwrap();
+                let n = self.rt("om_rt_read_line_len", &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![p, n, n], string_ty()));
+            }
+            ("read_line_ok", []) => {
+                let ok = self.rt("om_rt_read_line_ok", &[], Some(types::I8), &[])?.unwrap();
+                return Ok((vec![ok], Ty::Bool));
+            }
+            ("poll_key", []) => {
+                let k = self.rt("om_rt_poll_key", &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![k], Ty::Int(IntTy::I64)));
+            }
+            ("term_cols", []) | ("term_rows", []) => {
+                let name = if op == "term_cols" { "om_rt_term_cols" } else { "om_rt_term_rows" };
+                let k = self.rt(name, &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![k], Ty::Int(IntTy::I64)));
+            }
+            ("flush", []) => {
+                self.rt("om_rt_flush", &[], None, &[])?;
+                return Ok((vec![], Ty::Unit));
             }
             ("time_ns", []) => {
                 let t = self.rt("om_rt_time_ns", &[], Some(types::I64), &[])?.unwrap();
@@ -4197,11 +4519,26 @@ impl<'a> Lower<'a> {
     }
 
     fn match_expr(&mut self, scrut: &Expr, arms: &[Arm], span: Span, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
+        let st = string_ty();
+        let expected = if expected.is_none() && arms.iter().any(|a| matches!(a.body.kind, ExprKind::Interp(_))) {
+            Some(&st)
+        } else {
+            expected
+        };
         let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pat).collect();
         let (sv, sty, own, freeze) = self.subject(scrut, &pats, None)?;
         if sty == Ty::Never {
             return Ok((vec![], Ty::Never));
         }
+        // `match tile { WALL => .., FLOOR => .. }`: a constant's name in a pattern
+        // on a number, char or bool means its value.
+        let rewritten: Vec<Arm>;
+        let arms = if !matches!(sty, Ty::Enum(..)) {
+            rewritten = arms.iter().map(|a| Arm { pat: self.const_pattern(&a.pat), ..a.clone() }).collect();
+            &rewritten[..]
+        } else {
+            arms
+        };
         for arm in arms {
             self.check_pattern(&arm.pat, &sty)?;
         }
@@ -4266,6 +4603,28 @@ impl<'a> Lower<'a> {
             self.moved.extend(am);
         }
         Ok(self.finish_merge(m, was_dead))
+    }
+
+    /// Replace constant names in `pat` with their literal values.
+    fn const_pattern(&self, pat: &Pattern) -> Pattern {
+        let kind = match &pat.kind {
+            PatKind::Variant(name, subs) if subs.is_empty() => match self.cg.consts.get(name) {
+                Some((_, value)) => match (&value.kind, literal_int(value)) {
+                    (_, Some((n, _))) => PatKind::Int(n),
+                    (ExprKind::Unary(UnOp::Neg, inner), _) if literal_int(inner).is_some() => {
+                        PatKind::Int(-literal_int(inner).unwrap().0)
+                    }
+                    (ExprKind::Char(c), _) => PatKind::Char(*c),
+                    (ExprKind::Bool(b), _) => PatKind::Bool(*b),
+                    _ => pat.kind.clone(),
+                },
+                None => pat.kind.clone(),
+            },
+            PatKind::Or(alts) => PatKind::Or(alts.iter().map(|a| self.const_pattern(a)).collect()),
+            PatKind::Tuple(subs) => PatKind::Tuple(subs.iter().map(|a| self.const_pattern(a)).collect()),
+            k => k.clone(),
+        };
+        Pattern { kind, span: pat.span }
     }
 
     /// Check that `pat` can match a value of type `ty`.
@@ -4583,12 +4942,38 @@ impl<'a> Lower<'a> {
     }
 
     /// `print(x)` writes any value, or an interpolated string, followed by a newline.
-    fn print(&mut self, args: &[Arg], span: Span) -> CResult<(Vals, Ty)> {
-        let [arg] = args else {
-            return err("`print` takes exactly one argument", span);
+    /// `print(x)` and `eprint(x)` (to stderr), with an optional `end:` that
+    /// replaces the newline: `print("Loading", end: "")`.
+    fn print(&mut self, args: &[Arg], span: Span, stderr: bool) -> CResult<(Vals, Ty)> {
+        let name = if stderr { "eprint" } else { "print" };
+        let (value, end) = match args {
+            [a] if a.name.is_none() => (a, None),
+            [a, e] if a.name.is_none() && e.name.as_deref() == Some("end") => (a, Some(e)),
+            _ => {
+                return err(
+                    format!("`{name}` takes one value and an optional `end:`, like `{name}(x, end: \"\")`"),
+                    span,
+                )
+            }
         };
-        self.write_arg(arg)?;
-        self.write_str("\n")?;
+        if stderr {
+            // Keep stdout and stderr in the order they were written.
+            self.rt("om_rt_flush", &[], None, &[])?;
+        }
+        let saved = self.stderr;
+        self.stderr = stderr;
+        let r = (|| {
+            self.write_arg(value)?;
+            match end {
+                Some(e) => {
+                    let plain = Arg { name: None, value: e.value.clone(), span: e.span };
+                    self.write_arg(&plain)
+                }
+                None => self.write_str("\n"),
+            }
+        })();
+        self.stderr = saved;
+        r?;
         Ok((vec![], Ty::Unit))
     }
 
@@ -4901,6 +5286,7 @@ pub const RUNTIME_C: &str = r#"#ifdef _WIN32
 #include <io.h>
 #else
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -5125,6 +5511,19 @@ long long om_rt_time_ns(void) {
     return (long long)(t - 116444736000000000ULL) * 100LL;
 }
 void om_rt_sleep_ms(long long ms) { fflush(stdout); if (ms > 0) Sleep((DWORD)ms); }
+long long om_rt_poll_key(void) {
+    fflush(stdout);
+    if (!_isatty(_fileno(stdin))) { int c = getchar(); return c == EOF ? -1 : c; }
+    return _kbhit() ? om_rt_read_key() : 0;
+}
+static int om_console_size(int rows) {
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)) return rows ? 24 : 80;
+    return rows ? info.srWindow.Bottom - info.srWindow.Top + 1 : info.srWindow.Right - info.srWindow.Left + 1;
+}
+long long om_rt_term_cols(void) { return om_console_size(0); }
+long long om_rt_term_rows(void) { return om_console_size(1); }
+static void om_cooked_input(void) {}
 #else
 static struct termios om_saved_tty_;
 static int om_tty_raw_;
@@ -5137,16 +5536,25 @@ static int om_getc(int wait_ms) {
     unsigned char c;
     return read(0, &c, 1) == 1 ? c : -1;
 }
-long long om_rt_read_key(void) {
-    fflush(stdout);
-    if (!om_tty_raw_ && isatty(0) && tcgetattr(0, &om_saved_tty_) == 0) {
-        struct termios raw = om_saved_tty_;
-        raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
-        raw.c_cc[VMIN] = 1;
-        raw.c_cc[VTIME] = 0;
-        if (tcsetattr(0, TCSANOW, &raw) == 0) { om_tty_raw_ = 1; atexit(om_restore_tty); }
+static int om_tty_saved_;
+static void om_enter_raw(void) {
+    if (om_tty_raw_ || !isatty(0)) return;
+    if (!om_tty_saved_) {
+        if (tcgetattr(0, &om_saved_tty_) != 0) return;
+        om_tty_saved_ = 1;
+        atexit(om_restore_tty);
     }
-    int c = om_getc(-1);
+    struct termios raw = om_saved_tty_;
+    raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(0, TCSANOW, &raw) == 0) om_tty_raw_ = 1;
+}
+/* Back to line-by-line input with echo, for read_line. */
+static void om_cooked_input(void) {
+    if (om_tty_raw_) { tcsetattr(0, TCSANOW, &om_saved_tty_); om_tty_raw_ = 0; }
+}
+static long long om_decode_key(int c) {
     if (c == 27 && om_tty_raw_) {
         int b = om_getc(30);
         if (b == '[' || b == 'O') {
@@ -5155,6 +5563,28 @@ long long om_rt_read_key(void) {
         return 27;
     }
     return c == '\r' ? '\n' : c;
+}
+long long om_rt_poll_key(void) {
+    fflush(stdout);
+    om_enter_raw();
+    struct pollfd p = { 0, POLLIN, 0 };
+    if (poll(&p, 1, 0) <= 0) return 0;
+    return om_decode_key(om_getc(-1));
+}
+static int om_term_size(int rows) {
+    struct winsize w;
+    if (ioctl(1, TIOCGWINSZ, &w) == 0 && w.ws_col > 0 && w.ws_row > 0) return rows ? w.ws_row : w.ws_col;
+    const char *e = getenv(rows ? "LINES" : "COLUMNS");
+    int n = e ? atoi(e) : 0;
+    return n > 0 ? n : (rows ? 24 : 80);
+}
+long long om_rt_term_cols(void) { return om_term_size(0); }
+long long om_rt_term_rows(void) { return om_term_size(1); }
+long long om_rt_read_key(void) {
+    fflush(stdout);
+    om_enter_raw();
+    int c = om_getc(-1);
+    return om_decode_key(c);
 }
 long long om_rt_time_ns(void) {
     struct timespec ts;
@@ -5168,6 +5598,38 @@ void om_rt_sleep_ms(long long ms) {
     nanosleep(&ts, NULL);
 }
 #endif
+/* Command-line arguments, saved by main for args(). */
+static int om_argc_;
+static char **om_argv_;
+void om_rt_set_args(int argc, char **argv) { om_argc_ = argc; om_argv_ = argv; }
+long long om_rt_argc(void) { return om_argc_; }
+const char *om_rt_arg_ptr(long long i) { return i >= 0 && i < om_argc_ && om_argv_[i] ? om_argv_[i] : ""; }
+long long om_rt_arg_len(long long i) { return (long long)strlen(om_rt_arg_ptr(i)); }
+/* One line of input without its line ending; read_line_ok is 0 at end of input. */
+static long long om_line_len_;
+static char om_line_ok_;
+char *om_rt_read_line(void) {
+    fflush(stdout);
+    om_cooked_input();
+    size_t cap = 64, n = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { fputs("out of memory\n", stderr); exit(134); }
+    int c = EOF;
+    while ((c = getchar()) != EOF && c != '\n') {
+        if (n + 1 >= cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+            if (!buf) { fputs("out of memory\n", stderr); exit(134); }
+        }
+        buf[n++] = (char)c;
+    }
+    if (n > 0 && buf[n - 1] == '\r') n--;
+    om_line_ok_ = !(c == EOF && n == 0);
+    om_line_len_ = (long long)n;
+    return buf;
+}
+long long om_rt_read_line_len(void) { return om_line_len_; }
+char om_rt_read_line_ok(void) { return om_line_ok_; }
 void om_rt_memmove(void *dst, const void *src, long long n) { if (n > 0) memmove(dst, src, (size_t)n); }
 int om_rt_memcmp(const void *a, const void *b, long long n) { return n > 0 ? memcmp(a, b, (size_t)n) : 0; }
 "#;

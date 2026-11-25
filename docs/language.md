@@ -59,7 +59,7 @@ print("Hello from {name}! 6 * 7 = {6 * 7}, big: {fib(30) > 1000}")
 
 An interpolated string builds a `String` (Rust's `format!`). Where a `str` is
 expected, such as `s.push_str("{i};")`, it is a temporary that lives until the
-end of the statement. Inside `{...}`, nested string literals are not allowed.
+end of the statement. Strings can appear inside `{...}`: `"{name.replace("_", " ")}"`.
 
 *Why:* Rust's `format!` only accepts plain variable names inline
 (`{name}` works, `{a + b}` does not). Python, Kotlin, Swift and JavaScript
@@ -486,16 +486,49 @@ enum List { Cons(i64, Box[List]), Nil }
 `panic: ...` to stderr and exit with code 101, as Rust does. `unwrap` and
 `expect` panic the same way.
 
+## Conveniences beyond Rust
+
+These came from writing games in Om, where each one was a compile error that
+cost a round trip. All of them do what the code obviously means.
+
+- **Any integer type can index a list**: `v[i]` with `i: i64` or `i32` works;
+  a negative index is out of bounds and panics like any other. The count in
+  `[x; n]` can be any integer too (a negative count makes an empty list).
+- **`Vec::new()` takes its element type from a later `push`** (or `insert`) in
+  the same block when that value's type is plain: a literal, a variable, a
+  struct literal, a cast, or a call to a non-generic function.
+- **Unused values are dropped**: a value left at the end of a loop body or an
+  `if` without `else` (`for _ in 0..3 { list.pop() }`) is discarded, as
+  `expr;` is in Rust.
+- **A `str` becomes a `String` where a `String` is expected**: assigning
+  `name = "Om"` to a String, passing `"text"` to a `String` parameter or field,
+  `list.push("x")` on a `Vec[String]`, or an `if`/`match` whose other branch is
+  an interpolated string.
+- **`==` and `!=` work without an `Eq` impl** on tuples, structs (field by
+  field) and enums whose variants carry no data, like Rust's
+  `#[derive(PartialEq)]`. An `impl Eq` you write still takes over.
+- **Constants work as patterns**: `match tile { WALL => .., FLOOR | DOOR => .. }`
+  matches the constants' values (for number, char and bool constants).
+- **`*x` on a plain value is the value**: Om references are not pointers, so
+  a Rust-style `*x` on a loop variable from `for x in &list` or on a `&`
+  parameter simply reads `x`.
+
 ## Built-in functions
 
 | Function | Effect |
 |---|---|
-| `print(x)` | Prints any value (numbers, strings, tuples, structs, enums), followed by a newline |
+| `print(x)` | Prints any value (numbers, strings, tuples, structs, enums), followed by a newline. `print(x, end: "")` prints no newline (or any other ending). |
+| `eprint(x)` | Like `print`, to stderr (also takes `end:`) |
 | `panic(msg)` | Prints `panic: msg` to stderr and exits with code 101 |
 | `assert(cond)`, `assert(cond, msg)` | Panics if `cond` is false |
 | `read_key()` | Waits for one key and returns it as an `i64`: the byte (`'a' as i64`, `10` for Enter, `27` for Esc), `1000`..`1003` for the arrow keys (up, down, right, left), or `-1` at the end of input. On a terminal the key is not echoed and needs no Enter; with piped input it reads one byte. |
 | `time_ns()` | Nanoseconds since 1970, as an `i64` (for timing and random seeds) |
 | `sleep_ms(ms)` | Flushes output and pauses for `ms` milliseconds |
+| `poll_key()` | Like `read_key()` but never waits: `0` when no key is waiting. For real-time programs that check keys once per frame. |
+| `term_cols()`, `term_rows()` | The terminal's size in characters (80 and 24 if unknown) |
+| `flush()` | Writes out everything printed so far (output is buffered) |
+| `read_line()` | One line of input as `Option[String]`, without its line ending; `None` at the end of input |
+| `args()` | The command-line arguments as `Vec[String]`; the first is the program. `om run game.om 42` passes `"42"`. |
 
 ## Program entry
 

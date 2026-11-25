@@ -795,6 +795,38 @@ fn time_ns() -> i64 { intrinsic::time_ns() }
 // Flush output and pause for `ms` milliseconds.
 fn sleep_ms(ms: i64) { intrinsic::sleep_ms(ms) }
 
+// Like read_key, but never waits: returns 0 when no key is waiting. For
+// real-time programs such as games, which check for keys once per frame.
+fn poll_key() -> i64 { intrinsic::poll_key() }
+
+// The terminal's size in characters (80 x 24 when it cannot be found).
+fn term_cols() -> i64 { intrinsic::term_cols() }
+fn term_rows() -> i64 { intrinsic::term_rows() }
+
+// Write out anything printed so far (print buffers output for speed).
+fn flush() { intrinsic::flush() }
+
+// One line typed by the user (or piped in), without the line ending; None at
+// the end of input.
+fn read_line() -> Option[String] {
+    let line = intrinsic::read_line()
+    if intrinsic::read_line_ok() { Some(line) } else { None }
+}
+
+// The command-line arguments; the first is the program itself, as in Rust.
+// `om run game.om 42` passes "42".
+fn args() -> Vec[String] {
+    let mut out: Vec[String] = Vec::new()
+    let n = intrinsic::argc()
+    let mut i = 0
+    while i < n {
+        let s: str = intrinsic::str_from_raw(intrinsic::arg_ptr(i), intrinsic::arg_len(i))
+        out.push(s.to_string())
+        i += 1
+    }
+    out
+}
+
 // ---------- Box ----------
 
 /// A value stored on the heap. `*b` reaches the value; fields and methods

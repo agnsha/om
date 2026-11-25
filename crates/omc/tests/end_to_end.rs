@@ -459,7 +459,8 @@ fn rejects_bad_trait_programs() {
         ("struct A {} impl Shape for A {} fn main() {}", "cannot find trait `Shape`"),
         ("fn f[T](x: T) where U: Eq {} fn main() {}", "`U` is not a type parameter"),
         ("struct A {} fn big[T: Ord](a: T) {} fn main() { big(A {}) }", "A does not implement `Ord`"),
-        ("struct A {} fn main() { let x = A {} == A {} }", "implement `Eq` for it"),
+        // Structs, tuples and data-free enums compare field by field; enums with data need `Eq`.
+        ("enum A { X(i64) } fn main() { let x = A::X(1) == A::X(1) }", "implement `Eq` for it"),
         ("struct A {} fn main() { A {}.max(A {}) }", "trait `Ord` has one, but A does not implement it"),
         ("impl i64 { fn f(self) {} } fn main() {}", "implement a trait for it"),
         (
@@ -663,4 +664,80 @@ fn hollow_bell_game_builds_and_quits() {
     assert!(out.contains("T H E    H O L L O W    B E L L"), "{out}");
     assert!(out.contains("Depth 1/6"), "{out}");
     assert!(out.contains("Seed 42"), "{out}");
+}
+
+#[test]
+fn conveniences_from_writing_games() {
+    let src = r#"
+        const WALL: i64 = 0
+        const FLOOR: i64 = 1
+        const NEG: i64 = -5
+        enum T { Wall, Floor }
+        struct P { x: i64, y: i64 }
+        struct Named { p: P, name: String, t: T }
+        fn tile(t: i64) -> str { match t { WALL => "wall", FLOOR | 7 => "floor", NEG => "neg", _ => "?" } }
+        fn label(x: i64) -> str { if x > 0 { "pos" } else { "neg" } }
+        fn shout(s: String) -> String { s + "!" }
+        fn sum(v: &Vec[i64]) -> i64 { let mut t = 0; for x in v { t += *x }; t }
+        fn main() {
+            // Any integer type indexes a list, and sizes a `[x; n]`.
+            let v = [10, 20, 30]
+            let i: i64 = 2
+            let j: i32 = 1
+            print("{v[i]} {v[j]} {[7; i]} {[1; -2i64]}")
+            // Unused values at the end of a loop body or an else-less `if` are dropped.
+            let mut log = ["a".to_string(), "b".to_string()]
+            for _ in 0..3 { log.pop() }
+            if log.is_empty() { log.push("c"); log.len() }
+            print(log)
+            // `str` becomes `String` where a String is wanted.
+            let mut s = String::new()
+            s = "hello"
+            let n = Named { p: P { x: 1, y: 2 }, name: "monk", t: T::Floor }
+            let mode = if n.p.x > 0 { "{n.p.x} high" } else { "low" }
+            let loud = shout("hey")
+            print("{s} {n.name} {mode} {loud} {label(-1)}")
+            // `==` without an `Eq` impl, field by field.
+            let m = Named { p: P { x: 1, y: 2 }, name: "monk".to_string(), t: T::Floor }
+            print("{n == m} {T::Wall == T::Floor} {(1, 'a') == (1, 'a')} {P { x: 1, y: 2 } != P { x: 1, y: 3 }}")
+            // Constants as patterns; `*x` on a plain value is the value.
+            print("{tile(0)} {tile(7)} {tile(-5)} {tile(9)} {sum(&v)}")
+            // `Vec::new()` takes its element type from a later push.
+            let mut ps = Vec::new()
+            for k in 0..2 { ps.push(P { x: k, y: k }) }
+            let mut later = Vec::new()
+            let c = 'z'
+            later.push(c)
+            print("{ps} {later}")
+            print("no newline", end: "")
+            print("|", end: "\n")
+            eprint("to stderr")
+        }
+    "#;
+    let (out, errout, code) = run_status(src, "conveniences");
+    assert_eq!(code, 0, "{errout}");
+    assert_eq!(
+        out,
+        "30 20 [7, 7] []\n[\"c\"]\nhello monk 1 high hey! neg\ntrue false true true\nwall floor neg ? 60\n\
+         [P { x: 0, y: 0 }, P { x: 1, y: 1 }] ['z']\nno newline|\n"
+    );
+    assert_eq!(errout, "to stderr\n");
+}
+
+#[test]
+fn args_read_line_and_poll_key() {
+    let src = r#"
+        fn main() {
+            print(args().len())
+            loop {
+                match read_line() {
+                    Some(l) => print("[{l}]"),
+                    None => break,
+                }
+            }
+            print(poll_key())
+            print(term_cols() > 0 && term_rows() > 0)
+        }
+    "#;
+    assert_eq!(run_with_input(src, "lines", b"hello\r\nworld\n\nlast"), "1\n[hello]\n[world]\n[]\n[last]\n-1\ntrue\n");
 }
