@@ -37,9 +37,12 @@ the surrounding expression, not from later uses in the function; write
 `for i in 0u32..n` or annotate the variable when it matters. A literal that does
 not fit its type, such as `let x: u8 = 256`, is an error.
 
-Integer arithmetic currently wraps on overflow (Rust panics in debug builds and
-wraps in release builds); `checked_add`, `saturating_add` and friends are there
-when you want overflow handled explicitly.
+Integer overflow panics, in every build: `+`, `-`, `*`, unary `-`, division
+of `MIN` by `-1`, division or remainder by zero, and shifts by at least the
+bit width all stop the program with Rust's message, such as `panic: attempt to
+add with overflow`. Rust only checks in debug builds; Om never wraps silently.
+When wrapping or saturating is what you mean, say so with `wrapping_add`,
+`checked_add`, `saturating_add` and friends.
 
 String and char escapes: `\n \t \r \0 \\ \" \' \u{...}`, and `\x41` (two hex
 digits, up to `\x7F`) in strings. `"\x1b[1m"` starts an ANSI terminal style.
@@ -403,8 +406,28 @@ enum Result[T, E] { Ok(T), Err(E) }
 
 Both are written in Om in the compiler's prelude, and `Some`, `None`, `Ok`
 and `Err` can be used without a prefix. Methods: `is_some`, `is_none`,
-`unwrap`, `expect`, `unwrap_or`, `ok_or` on Option, and `is_ok`, `is_err`,
-`unwrap`, `expect`, `unwrap_or`, `ok`, `err` on Result.
+`unwrap`, `expect`, `unwrap_or`, `ok_or`, `context` on Option, and `is_ok`,
+`is_err`, `unwrap`, `expect`, `unwrap_or`, `ok`, `err`, `context` on Result.
+
+A bare `.unwrap()` is a compile error (E0900) except inside `fn test_*`
+functions: a panic with no message is hard to debug, and it is the most common
+way a "can't happen" turns into an outage. Use `?`, `unwrap_or`, `match`, or
+`expect("why this cannot fail")`.
+
+`context(message)` turns an Option or Result into a `Result[T, String]` whose
+error says what was being done. Errors gain one layer per call, so the final
+message reads like a trail:
+
+```om
+fn port(text: str) -> Result[i64, String] {
+    text.parse_int().context("parsing port `{text}`")
+}
+
+fn load() -> Result[i64, String] {
+    port("80x").context("loading settings")
+}
+// load() is Err("loading settings: parsing port `80x`: invalid digit found in string")
+```
 
 `expr?` unwraps a success value or returns the failure from the current
 function, which must return the same kind (Option or Result with the same
@@ -497,7 +520,26 @@ enum List { Cons(i64, Box[List]), Nil }
 
 `panic("message {x}")`, `assert(cond)` and `assert(cond, "message")` print
 `panic: ...` to stderr and exit with code 101, as Rust does. `unwrap` and
-`expect` panic the same way.
+`expect` panic the same way, and `Result::expect` adds the error:
+`panic: message: error`. `assert_eq(left, right)` panics with both values.
+
+## Effects
+
+A function can declare what it may do with a `uses` clause after its return
+type. The effects are `io` (printing) and `panic` (`panic`, `assert`,
+`unwrap`, `expect`, and calls that may do these); `uses` with nothing after it
+means pure.
+
+```om
+fn area(w: i64, h: i64) -> i64 uses { w * h }
+fn report(w: i64) uses io { print("width {w}") }
+```
+
+The compiler checks declared effects through every call, including calls to
+generic and trait methods (E0901). Functions without a `uses` clause are not
+checked, so you can add clauses where they matter. `om audit file.om` lists
+the effects of every function. Arithmetic overflow is not counted as a panic
+effect.
 
 ## Conveniences beyond Rust
 
@@ -540,6 +582,7 @@ cost a round trip. All of them do what the code obviously means.
 | `eprint(x)` | Like `print`, to stderr (also takes `end:`) |
 | `panic(msg)` | Prints `panic: msg` to stderr and exits with code 101 |
 | `assert(cond)`, `assert(cond, msg)` | Panics if `cond` is false |
+| `assert_eq(left, right)` | Panics if `left != right`, showing both |
 | `read_key()` | Waits for one key and returns it as an `i64`: the byte (`'a' as i64`, `10` for Enter, `27` for Esc), `1000`..`1003` for the arrow keys (up, down, right, left), or `-1` at the end of input. On a terminal the key is not echoed and needs no Enter; with piped input it reads one byte. Once a program reads keys, Ctrl+C puts the terminal back (colours, cursor, main screen) before stopping it. |
 | `time_ns()` | Nanoseconds since 1970, as an `i64` (for timing and random seeds) |
 | `sleep_ms(ms)` | Flushes output and pauses for `ms` milliseconds |

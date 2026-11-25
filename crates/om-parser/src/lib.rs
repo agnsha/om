@@ -30,9 +30,10 @@
 //! and `match` headers, so `if x { ... }` is never read as a struct literal.
 
 pub mod ast;
+pub mod visit;
 
 use ast::*;
-use om_lexer::{lex, LexError, Span, StrPart, Token, TokenKind as T};
+use om_lexer::{lex, lex_all, LexError, Span, StrPart, Token, TokenKind as T};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,24 +58,63 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
-/// Lex and parse a whole Om source file.
+/// Lex and parse a whole Om source file, stopping at the first error.
 pub fn parse(src: &str) -> PResult<Program> {
-    let tokens = lex(src)?;
+    let (prog, mut errors) = parse_all(src);
+    if errors.is_empty() {
+        Ok(prog)
+    } else {
+        Err(errors.remove(0))
+    }
+}
+
+/// Deepest nesting of expressions, blocks, types and patterns. Deeper input
+/// would overflow the compiler's stack; real code never comes close.
+pub const MAX_DEPTH: usize = 256;
+/// Most errors one parse reports.
+pub const MAX_ERRORS: usize = 200;
+
+/// Lex and parse a whole file, recovering after each error at the next
+/// statement or top-level item, so one run reports every syntax error.
+/// The program is partial when there are errors.
+pub fn parse_all(src: &str) -> (Program, Vec<ParseError>) {
+    let (tokens, lex_errors) = lex_all(src);
+    let mut errors: Vec<ParseError> = lex_errors.into_iter().map(ParseError::from).collect();
+    // Where each token sits on its line, for recovery.
+    let mut first_on_line = Vec::with_capacity(tokens.len());
+    let mut col0 = Vec::with_capacity(tokens.len());
+    let mut prev_end = 0;
+    for t in &tokens {
+        let start = t.span.start.min(src.len());
+        let gap = src.get(prev_end.min(start)..start).unwrap_or("");
+        first_on_line.push(prev_end == 0 || gap.contains('\n'));
+        col0.push(start == 0 || src[..start].ends_with('\n'));
+        prev_end = t.span.end;
+    }
     let nl = newlines_before(src, &tokens);
-    let mut p = Parser { tokens, nl, pos: 0, no_struct: false, label: None };
+    let mut p =
+        Parser { tokens, nl, pos: 0, no_struct: false, label: None, depth: 0, errors: vec![], first_on_line, col0 };
     let mut prog = Program::default();
-    while !p.at(&T::Eof) {
-        match p.peek().kind {
-            T::Fn => prog.functions.push(p.function()?),
-            T::Struct => prog.structs.push(p.struct_def()?),
-            T::Enum => prog.enums.push(p.enum_def()?),
-            T::Impl => prog.impls.push(p.impl_block()?),
-            T::Const => prog.consts.push(p.const_def()?),
-            T::Trait => prog.traits.push(p.trait_def()?),
-            _ => return p.error("`fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
+    while !p.at(&T::Eof) && p.errors.len() < MAX_ERRORS {
+        let start = p.pos;
+        let item = match p.peek().kind {
+            T::Fn => p.function().map(|f| prog.functions.push(f)),
+            T::Struct => p.struct_def().map(|s| prog.structs.push(s)),
+            T::Enum => p.enum_def().map(|e| prog.enums.push(e)),
+            T::Impl => p.impl_block().map(|i| prog.impls.push(i)),
+            T::Const => p.const_def().map(|c| prog.consts.push(c)),
+            T::Trait => p.trait_def().map(|t| prog.traits.push(t)),
+            _ => p.error("`fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
+        };
+        if let Err(e) = item {
+            p.errors.push(e);
+            p.sync_item(start);
         }
     }
-    Ok(prog)
+    errors.append(&mut p.errors);
+    errors.sort_by_key(|e| e.span.start);
+    errors.truncate(MAX_ERRORS);
+    (prog, errors)
 }
 
 struct Parser {
@@ -84,6 +124,13 @@ struct Parser {
     no_struct: bool,
     /// A `'label:` waiting for the loop that follows it.
     label: Option<String>,
+    /// Current nesting, checked against [`MAX_DEPTH`].
+    depth: usize,
+    /// Errors recovered from so far.
+    errors: Vec<ParseError>,
+    /// Per token: is it the first token on its line, and does it start at column 0?
+    first_on_line: Vec<bool>,
+    col0: Vec<bool>,
     /// For each token, whether a line break comes before it.
     nl: Vec<bool>,
 }
@@ -215,6 +262,72 @@ impl Parser {
         self.tokens[self.pos.saturating_sub(1)].span
     }
 
+    /// Run `f` one nesting level deeper, failing cleanly past [`MAX_DEPTH`].
+    fn deep<X>(&mut self, f: impl FnOnce(&mut Self) -> PResult<X>) -> PResult<X> {
+        self.check_depth(1)?;
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
+    /// Fail if `extra` more levels (from a chain like `a + b + c` or `x.f().g()`) would be too deep.
+    fn check_depth(&self, extra: usize) -> PResult<()> {
+        if self.depth + extra <= MAX_DEPTH {
+            return Ok(());
+        }
+        Err(ParseError {
+            message: format!(
+                "this nests too deeply (more than {MAX_DEPTH} levels); split it up with `let` or helper functions"
+            ),
+            span: self.peek().span,
+        })
+    }
+
+    fn is_depth_error(e: &ParseError) -> bool {
+        e.message.starts_with("this nests too deeply")
+    }
+
+    /// After an error in a top-level item, skip to the next item that starts a line.
+    fn sync_item(&mut self, start: usize) {
+        if self.pos == start {
+            self.bump();
+        }
+        while !self.at(&T::Eof) {
+            let item = matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait);
+            if item && self.col0.get(self.pos).copied().unwrap_or(false) {
+                return;
+            }
+            self.bump();
+        }
+    }
+
+    /// After an error in a statement, skip to the end of it: a `;`, the block's
+    /// closing `}`, or the next line at the same bracket depth.
+    fn sync_stmt(&mut self, start: usize) {
+        if self.pos == start && !matches!(self.peek().kind, T::RBrace | T::Eof) {
+            self.bump();
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.peek().kind {
+                T::Eof => return,
+                T::RBrace if depth == 0 => return,
+                T::Semi if depth == 0 => {
+                    self.bump();
+                    return;
+                }
+                T::LBrace | T::LParen | T::LBracket => depth += 1,
+                T::RBrace | T::RParen | T::RBracket => depth = depth.saturating_sub(1),
+                _ if depth == 0 && self.pos != start && self.first_on_line.get(self.pos).copied().unwrap_or(false) => {
+                    return
+                }
+                _ => {}
+            }
+            self.bump();
+        }
+    }
+
     fn error<X>(&self, expected: &str) -> PResult<X> {
         let t = self.peek();
         Err(ParseError { message: format!("expected {expected}, found {}", t.kind), span: t.span })
@@ -239,6 +352,10 @@ impl Parser {
     }
 
     fn ty(&mut self) -> PResult<TypeExpr> {
+        self.deep(|p| p.ty_inner())
+    }
+
+    fn ty_inner(&mut self) -> PResult<TypeExpr> {
         let start = self.peek().span;
         if self.eat(&T::LParen) {
             // `()`, `(T)`, `(T,)`, `(A, B)`
@@ -314,6 +431,23 @@ impl Parser {
         }
     }
 
+    /// Optional `uses io, panic` effect list after the signature. `uses` is only a
+    /// keyword in this position, so it stays usable as a name elsewhere.
+    fn uses_clause(&mut self) -> PResult<Option<Vec<(String, Span)>>> {
+        if !matches!(&self.peek().kind, T::Ident(n) if n == "uses") {
+            return Ok(None);
+        }
+        self.bump();
+        let mut effects = Vec::new();
+        while let T::Ident(_) = self.peek().kind {
+            effects.push(self.ident()?);
+            if !self.eat(&T::Comma) {
+                break;
+            }
+        }
+        Ok(Some(effects))
+    }
+
     /// Optional `where T: A + B, U: C` before a body.
     fn where_clause(&mut self, out: &mut Vec<Bound>) -> PResult<()> {
         if self.eat(&T::Where) {
@@ -366,15 +500,16 @@ impl Parser {
         }
         self.expect(T::RParen)?;
         let ret = if self.eat(&T::Arrow) { Some(self.ty()?) } else { None };
+        let uses = self.uses_clause()?;
         self.where_clause(&mut bounds)?;
         if in_trait && !self.at(&T::LBrace) {
             self.eat(&T::Semi);
             let span = start.to(self.prev_span());
             let body = Block { stmts: vec![], tail: None, span };
-            return Ok(Function { name, generics, bounds, params, ret, body, has_body: false, span });
+            return Ok(Function { name, generics, bounds, params, ret, body, has_body: false, uses, span });
         }
         let body = self.block()?;
-        Ok(Function { name, generics, bounds, params, ret, span: start.to(body.span), body, has_body: true })
+        Ok(Function { name, generics, bounds, params, ret, span: start.to(body.span), body, has_body: true, uses })
     }
 
     fn param(&mut self) -> PResult<Param> {
@@ -518,7 +653,7 @@ impl Parser {
     // ---------- statements ----------
 
     fn block(&mut self) -> PResult<Block> {
-        self.nested(|p| p.block_inner())
+        self.deep(|p| p.nested(|p| p.block_inner()))
     }
 
     fn block_inner(&mut self) -> PResult<Block> {
@@ -529,7 +664,21 @@ impl Parser {
             if self.at(&T::Eof) {
                 return self.error("`}`");
             }
-            let stmt = self.stmt()?;
+            let stmt_start = self.pos;
+            let stmt = match self.stmt() {
+                Ok(s) => s,
+                // Record the error and carry on with the next statement.
+                Err(e)
+                    if !Self::is_depth_error(&e)
+                        && self.errors.len() < MAX_ERRORS
+                        && !self.first_on_line.is_empty() =>
+                {
+                    self.errors.push(e);
+                    self.sync_stmt(stmt_start);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let had_semi = self.eat(&T::Semi);
             match stmt {
                 Stmt::Expr(e) if !had_semi && self.at(&T::RBrace) => tail = Some(Box::new(e)),
@@ -686,13 +835,17 @@ impl Parser {
     // ---------- expressions ----------
 
     fn expr(&mut self) -> PResult<Expr> {
-        self.binary(0)
+        self.deep(|p| p.binary(0))
     }
 
     /// Precedence climbing. Higher numbers bind tighter.
     fn binary(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.unary()?;
+        // Each operator in a chain like `a + b + c` nests the tree one level deeper.
+        let mut chain = 0;
         loop {
+            chain += 1;
+            self.check_depth(chain)?;
             if self.at(&T::PipeGt) {
                 if min_prec > 0 {
                     return Ok(lhs);
@@ -741,7 +894,10 @@ impl Parser {
     /// bind tighter than `as`: `-1 as u32` is `(-1) as u32`.
     fn unary(&mut self) -> PResult<Expr> {
         let mut e = self.prefix()?;
+        let mut chain = 0;
         while self.eat(&T::As) {
+            chain += 1;
+            self.check_depth(chain)?;
             let ty = self.ty()?;
             let span = e.span.to(ty.span);
             e = Expr { kind: ExprKind::Cast(Box::new(e), ty), span };
@@ -750,6 +906,10 @@ impl Parser {
     }
 
     fn prefix(&mut self) -> PResult<Expr> {
+        self.deep(|p| p.prefix_inner())
+    }
+
+    fn prefix_inner(&mut self) -> PResult<Expr> {
         let start = self.peek().span;
         let kind = match self.peek().kind {
             T::Minus | T::Bang | T::Star => {
@@ -774,7 +934,10 @@ impl Parser {
 
     fn postfix(&mut self) -> PResult<Expr> {
         let mut e = self.primary()?;
+        let mut chain = 0;
         loop {
+            chain += 1;
+            self.check_depth(chain)?;
             if self.at(&T::Question) {
                 let end = self.bump().span;
                 let span = e.span.to(end);
@@ -911,7 +1074,7 @@ impl Parser {
             }
             T::InterpStr(parts) => {
                 self.bump();
-                ExprKind::Interp(parts.into_iter().map(interp_part).collect::<PResult<_>>()?)
+                ExprKind::Interp(parts.into_iter().map(|x| interp_part(x, self.depth)).collect::<PResult<_>>()?)
             }
             T::True | T::False => {
                 self.bump();
@@ -920,6 +1083,13 @@ impl Parser {
             T::Ident(name) => {
                 self.bump();
                 let path = self.path_rest(name)?;
+                if self.at(&T::Bang) && matches!(self.peek_at(1), T::LParen | T::LBracket | T::LBrace) {
+                    // Rust habit: `println!(...)`, `vec![...]`.
+                    return Err(ParseError {
+                        message: format!("Om has no macros; call `{path}(...)` as a function, without `!`"),
+                        span: self.peek().span,
+                    });
+                }
                 // As with `[`, a `(` that starts a line begins a new expression
                 // instead of calling the name on the line before.
                 if self.at(&T::LParen) && !self.line_start() {
@@ -999,6 +1169,10 @@ impl Parser {
     }
 
     fn if_expr(&mut self) -> PResult<Expr> {
+        self.deep(|p| p.if_inner())
+    }
+
+    fn if_inner(&mut self) -> PResult<Expr> {
         let start = self.expect(T::If)?;
         if self.eat(&T::Let) {
             // `if let P = e { a } else { b }` is `match e { P => { a }, _ => { b } }`.
@@ -1078,6 +1252,10 @@ impl Parser {
     }
 
     fn pattern(&mut self) -> PResult<Pattern> {
+        self.deep(|p| p.pattern_inner())
+    }
+
+    fn pattern_inner(&mut self) -> PResult<Pattern> {
         self.eat(&T::Pipe); // allow a leading `|`
         let first = self.pattern_alt()?;
         if !self.at(&T::Pipe) {
@@ -1212,7 +1390,7 @@ fn pipe(lhs: Expr, rhs: Expr) -> PResult<Expr> {
 }
 
 /// Parse the code inside `{...}` of an interpolated string.
-fn interp_part(part: StrPart) -> PResult<InterpPart> {
+fn interp_part(part: StrPart, depth: usize) -> PResult<InterpPart> {
     match part {
         StrPart::Lit(s) => Ok(InterpPart::Lit(s)),
         StrPart::Code(code, offset) => {
@@ -1224,7 +1402,17 @@ fn interp_part(part: StrPart) -> PResult<InterpPart> {
                 t.span = Span::new(t.span.start + offset, t.span.end + offset);
             }
             let nl = vec![false; tokens.len()];
-            let mut p = Parser { tokens, nl, pos: 0, no_struct: false, label: None };
+            let mut p = Parser {
+                tokens,
+                nl,
+                pos: 0,
+                no_struct: false,
+                label: None,
+                depth,
+                errors: vec![],
+                first_on_line: vec![],
+                col0: vec![],
+            };
             let e = p.expr()?;
             if !p.at(&T::Eof) {
                 return p.error("`}` to end the interpolation");

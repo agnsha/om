@@ -184,8 +184,8 @@ fn mix(a: i64, b: i64, t: f64) -> i64 {
 fn scale(c: i64, k: f64) -> i64 { rgb(cr(c) * k, cg(c) * k, cb(c) * k) }
 
 fn hash(x: i64, y: i64, s: i64) -> f64 {
-    let mut h = (x * 374761393 + y * 668265263 + s * 1442695041) as u64
-    h = (h ^ (h >> 13)) * 1274126177
+    let mut h = x.wrapping_mul(374761393).wrapping_add(y.wrapping_mul(668265263)).wrapping_add(s.wrapping_mul(1442695041)) as u64
+    h = (h ^ (h >> 13)).wrapping_mul(1274126177)
     h = h ^ (h >> 16)
     ((h & 0xFFFFFF) as i64) as f64 / 16777216.0
 }
@@ -323,7 +323,7 @@ fn bar(v: f64, max: f64, n: i64) -> String {
 impl Game {
     fn new(seed: u64) -> Game {
         let mut g = Game {
-            rng: seed * 2654435761 + 88172645463325252,
+            rng: seed.wrapping_mul(2654435761).wrapping_add(88172645463325252),
             seed: seed,
             precise: key_down('w' as i64) >= 0,
             tex: [0; NTEX * TS * TS],
@@ -344,7 +344,7 @@ impl Game {
         x ^= x << 25
         x ^= x >> 27
         self.rng = x
-        x * 0x2545F4914F6CDD1D
+        x.wrapping_mul(0x2545F4914F6CDD1D)
     }
     fn rn(&mut self, n: i64) -> i64 { if n <= 0 { 0 } else { ((self.rand() >> 1) % (n as u64)) as i64 } }
     fn rf(&mut self) -> f64 { ((self.rand() >> 11) as i64) as f64 / 9007199254740992.0 }
@@ -469,7 +469,7 @@ impl Game {
             stack.push(start)
             label[start] = start
             while stack.len() > 0 {
-                let i = stack.pop().unwrap()
+                let i = stack.pop().expect("the loop runs only while the stack is not empty")
                 count += 1
                 let x = i % self.mw
                 let y = i / self.mw
@@ -1371,7 +1371,7 @@ impl Game {
     }
 
     fn new_run(&mut self) {
-        self.rng = self.seed * 2654435761 + 88172645463325252
+        self.rng = self.seed.wrapping_mul(2654435761).wrapping_add(88172645463325252)
         self.depth = 1
         self.oil = OIL_MAX
         self.hp = 100.0

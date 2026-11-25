@@ -56,8 +56,9 @@ impl {t} {{
         let mut e = exp
         while e > 0 {{
             if e & 1 == 1 {{ result = result * base }}
-            base = base * base
             e = e >> 1
+            // Squaring after the last bit could overflow even when the result fits.
+            if e > 0 {{ base = base * base }}
         }}
         result
     }}
@@ -65,21 +66,21 @@ impl {t} {{
     fn count_zeros(self) -> u32 {{ intrinsic::popcnt(!self) }}
     fn leading_zeros(self) -> u32 {{ intrinsic::clz(self) }}
     fn trailing_zeros(self) -> u32 {{ intrinsic::ctz(self) }}
-    fn wrapping_add(self, other: {t}) -> {t} {{ self + other }}
-    fn wrapping_sub(self, other: {t}) -> {t} {{ self - other }}
-    fn wrapping_mul(self, other: {t}) -> {t} {{ self * other }}
+    fn wrapping_add(self, other: {t}) -> {t} {{ intrinsic::wrapping_add(self, other) }}
+    fn wrapping_sub(self, other: {t}) -> {t} {{ intrinsic::wrapping_sub(self, other) }}
+    fn wrapping_mul(self, other: {t}) -> {t} {{ intrinsic::wrapping_mul(self, other) }}
     fn checked_add(self, other: {t}) -> Option[{t}] {{
-        let r = self + other
+        let r = intrinsic::wrapping_add(self, other)
         if (other >= 0) == (r >= self) {{ Some(r) }} else {{ None }}
     }}
     fn checked_sub(self, other: {t}) -> Option[{t}] {{
-        let r = self - other
+        let r = intrinsic::wrapping_sub(self, other)
         if (other >= 0) == (r <= self) {{ Some(r) }} else {{ None }}
     }}
     fn checked_mul(self, other: {t}) -> Option[{t}] {{
         if self == 0 || other == 0 {{ return Some(0) }}
         {mul_guard}
-        let r = self * other
+        let r = intrinsic::wrapping_mul(self, other)
         if r / other == self {{ Some(r) }} else {{ None }}
     }}
     fn checked_div(self, other: {t}) -> Option[{t}] {{

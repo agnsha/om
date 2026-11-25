@@ -50,6 +50,14 @@ impl[T] Option[T] {
             None => Err(error),
         }
     }
+
+    /// `None` becomes an error that says what was missing: `config.get("port").context("no port set")?`.
+    fn context(self, message: str) -> Result[T, String] {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(message.to_string()),
+        }
+    }
 }
 
 impl[T, E] Result[T, E] {
@@ -67,14 +75,14 @@ impl[T, E] Result[T, E] {
     fn unwrap(self) -> T {
         match self {
             Ok(v) => v,
-            Err(_) => panic("called `Result::unwrap()` on an `Err` value"),
+            Err(e) => panic("called `Result::unwrap()` on an `Err` value: {e}"),
         }
     }
 
     fn expect(self, message: str) -> T {
         match self {
             Ok(v) => v,
-            Err(_) => panic(message),
+            Err(e) => panic("{message}: {e}"),
         }
     }
 
@@ -96,6 +104,16 @@ impl[T, E] Result[T, E] {
         match self {
             Ok(_) => None,
             Err(e) => Some(e),
+        }
+    }
+
+    /// Wrap the error with what was being done, so it reads like a trail:
+    /// `read(path).context("loading settings")?` fails with
+    /// `loading settings: file not found`.
+    fn context(self, message: str) -> Result[T, String] {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err("{message}: {e}"),
         }
     }
 }
@@ -873,5 +891,14 @@ impl[T: Eq] Eq for Box[T] {
         intrinsic::forget(a)
         intrinsic::forget(b)
         same
+    }
+}
+
+// ---------- testing ----------
+
+/// Panic unless `left == right`, showing both values.
+fn assert_eq[T: Eq](left: T, right: T) {
+    if !left.eq(&right) {
+        panic("assertion failed: left == right\n  left: {left}\n right: {right}")
     }
 }

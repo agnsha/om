@@ -13,15 +13,25 @@ fn root() -> PathBuf {
 }
 
 fn build_and_run(src: &str, name: &str) -> String {
-    // Tests run in parallel: give every build its own file.
-    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}-{n}{EXE}", std::process::id()));
+    // A private directory per build: two tests may use the same name.
+    let dir = omc::TempDir::new().unwrap();
+    let exe = dir.path().join(format!("{name}{EXE}"));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
-    let out = Command::new(&exe).output().expect("run compiled program");
-    let _ = std::fs::remove_file(&exe);
+    let out = run_exe(&exe);
     assert!(out.status.success(), "{name} exited with {}", out.status);
     String::from_utf8(out.stdout).unwrap()
+}
+
+/// Run a freshly linked program. Linux can briefly report "text file busy" when
+/// another test thread forks while the file is being written; retry then.
+fn run_exe(exe: &Path) -> std::process::Output {
+    for _ in 0..50 {
+        match Command::new(exe).output() {
+            Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            r => return r.expect("run compiled program"),
+        }
+    }
+    panic!("{} stayed busy", exe.display())
 }
 
 #[test]
@@ -45,11 +55,10 @@ fn examples_produce_expected_output() {
 
 #[test]
 fn main_return_value_is_exit_code() {
-    let exe = std::env::temp_dir().join(format!("om-test-exit-{}{EXE}", std::process::id()));
+    let dir = omc::TempDir::new().unwrap();
+    let exe = dir.path().join(format!("exit{EXE}"));
     omc::build("fn main() -> i64 { 3 + 4 }", &exe).unwrap();
-    let status = Command::new(&exe).status().unwrap();
-    let _ = std::fs::remove_file(&exe);
-    assert_eq!(status.code(), Some(7));
+    assert_eq!(run_exe(&exe).status.code(), Some(7));
 }
 
 #[test]
@@ -300,11 +309,10 @@ fn rejects_bad_programs() {
 }
 
 fn run_status(src: &str, name: &str) -> (String, String, i32) {
-    let dir = std::env::temp_dir().join(format!("om-e2e-status-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join(format!("{name}{EXE}"));
+    let dir = omc::TempDir::new().unwrap();
+    let exe = dir.path().join(format!("{name}{EXE}"));
     omc::build(src, &exe).expect("build should succeed");
-    let out = std::process::Command::new(&exe).output().unwrap();
+    let out = run_exe(&exe);
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -377,7 +385,10 @@ fn tuples_patterns_if_let_and_while_let() {
 fn panic_and_assert_exit_101() {
     let (out, err, code) = run_status(r#"fn main() { print("before") panic("bad {1 + 1}") }"#, "panic");
     assert_eq!((out.as_str(), err.as_str(), code), ("before\n", "panic: bad 2\n", 101));
-    let (_, err, code) = run_status("fn main() { let x: Option[i64] = None; print(x.unwrap()) }", "unwrap");
+    let (_, err, code) = run_status(
+        "fn test_none() { let x: Option[i64] = None; print(x.unwrap()) }\nfn main() { test_none() }",
+        "unwrap",
+    );
     assert_eq!((err.as_str(), code), ("panic: called `Option::unwrap()` on a `None` value\n", 101));
     let (_, err, code) = run_status("fn main() { assert(1 > 2) }", "assert");
     assert_eq!((err.as_str(), code), ("panic: assertion failed\n", 101));
@@ -623,17 +634,13 @@ fn run_with_input(src: &str, name: &str, input: &[u8]) -> String {
 fn run_with_args(src: &str, name: &str, args: &[&str], input: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
-    let exe = std::env::temp_dir().join(format!("om-test-{name}-{}{EXE}", std::process::id()));
+    let dir = omc::TempDir::new().unwrap();
+    let exe = dir.path().join(format!("{name}{EXE}"));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
-    let mut child = Command::new(&exe)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
+    let mut child = omc::spawn(Command::new(&exe).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()))
         .expect("run compiled program");
     child.stdin.take().unwrap().write_all(input).unwrap();
     let out = child.wait_with_output().unwrap();
-    let _ = std::fs::remove_file(&exe);
     assert!(out.status.success(), "{name} exited with {}", out.status);
     String::from_utf8(out.stdout).unwrap()
 }

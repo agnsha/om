@@ -469,12 +469,59 @@ pub fn compile_to_object(program: &Program) -> CResult<Vec<u8>> {
 /// Like [`compile_to_object`]; `check_prelude` also compiles every non-generic
 /// prelude function, used or not (for testing the prelude itself).
 pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> {
+    match compile_all(program, check_prelude, true) {
+        Ok(out) => Ok(out.object.unwrap_or_default()),
+        Err(mut errors) => Err(errors.remove(0)),
+    }
+}
+
+/// The result of [`compile_all`].
+#[derive(Debug, Default)]
+pub struct Compiled {
+    /// The object file, unless only checking was asked for.
+    pub object: Option<Vec<u8>>,
+    /// Generic functions that were never called, so their bodies were never type-checked.
+    pub unchecked_generics: Vec<(String, Span)>,
+}
+
+/// Most generic instances one program may create. A generic function that calls
+/// itself with a bigger type would otherwise make the compiler run forever.
+pub const MAX_INSTANCES: usize = 20_000;
+/// Most errors one compile reports; past this the rest are noise.
+pub const MAX_ERRORS: usize = 200;
+/// Most scalars one value may flatten into (see "Value representation").
+pub const MAX_TYPE_WIDTH: usize = 1 << 10;
+/// Deepest nesting of type arguments and fields, as in Rust's recursion limit.
+pub const MAX_TYPE_DEPTH: usize = 64;
+
+/// Type-check `program` and report every error found, not just the first: the
+/// first error in each function, plus any error before function bodies are
+/// checked. With `emit` false, machine code is not generated (`om check`).
+pub fn compile_all(program: &Program, check_prelude: bool, emit: bool) -> Result<Compiled, Vec<CompileError>> {
+    let mut errors = Vec::new();
+    match compile_inner(program, check_prelude, emit, &mut errors) {
+        Ok(out) if errors.is_empty() => Ok(out),
+        Ok(_) => Err(errors),
+        Err(e) => {
+            errors.push(e);
+            Err(errors)
+        }
+    }
+}
+
+fn compile_inner(
+    program: &Program,
+    check_prelude: bool,
+    emit: bool,
+    errors: &mut Vec<CompileError>,
+) -> CResult<Compiled> {
     let src = prelude_source();
     let prelude = om_parser::parse(&src).map_err(|e| {
         let line = src[..e.span.start.min(src.len())].lines().count();
         internal(format!("prelude line {line}: {e}"))
     })?;
     let prelude_impls = prelude.impls.len();
+    let prelude_fns = prelude.functions.len();
     let mut all = prelude;
     all.functions.extend(program.functions.iter().cloned());
     all.structs.extend(program.structs.iter().cloned());
@@ -517,11 +564,14 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
         consts: HashMap::new(),
         traits: HashMap::new(),
         impls: HashMap::new(),
+        emit,
+        used_defs: HashSet::new(),
         glue: HashMap::new(),
         glue_queue: Vec::new(),
         origins: HashMap::new(),
         glue_origins: HashMap::new(),
         cur_origin: None,
+        user_fn_span: None,
         needs_drop_cache: Default::default(),
     };
 
@@ -571,8 +621,9 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
         }
     }
 
-    for f in &program.functions {
-        let def = FnDef { f: f.clone(), impl_generics: vec![], impl_bounds: vec![], impl_ty: None, prelude: false };
+    for (i, f) in program.functions.iter().enumerate() {
+        let prelude = i < prelude_fns;
+        let def = FnDef { f: f.clone(), impl_generics: vec![], impl_bounds: vec![], impl_ty: None, prelude };
         cg.add_def(f.name.clone(), def, f.span)?;
     }
     for (i, imp) in program.impls.iter().enumerate() {
@@ -595,13 +646,16 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
         .collect();
     keys.sort();
     for k in keys {
-        cg.instantiate(&k, Subst::new(), Span::default())?;
+        if let Err(e) = cg.instantiate(&k, Subst::new(), Span::default()) {
+            errors.push(e);
+        }
     }
     let mut ctx = cg.module.make_context();
     let mut fctx = FunctionBuilderContext::new();
     loop {
         let (r, what) = if let Some((inst, key, subst)) = cg.queue.pop() {
             cg.cur_origin = if cg.defs[&key].prelude { cg.origins.get(&inst).copied() } else { None };
+            cg.user_fn_span = if cg.defs[&key].prelude { None } else { Some(cg.defs[&key].f.span) };
             (cg.define(&inst, &key, subst, &mut ctx, &mut fctx), format!("inside the library's `{key}`"))
         } else if let Some((id, ty, kind)) = cg.glue_queue.pop() {
             cg.cur_origin = cg.glue_origins.get(&id).copied();
@@ -620,11 +674,32 @@ pub fn compile_with(program: &Program, check_prelude: bool) -> CResult<Vec<u8>> 
                 e.span = o;
                 e.message = format!("{} ({what}, needed here)", e.message);
             }
-            return Err(e);
+            // Keep going so one run reports an error in every function.
+            errors.push(e);
+            cg.module.clear_context(&mut ctx);
+            fctx = FunctionBuilderContext::new();
+            if errors.len() >= MAX_ERRORS {
+                break;
+            }
         }
         cg.cur_origin = None;
     }
-    cg.module.finish().emit().map_err(|e| internal(format!("writing object file: {e}")))
+    let mut unchecked_generics: Vec<(String, Span)> = cg
+        .defs
+        .iter()
+        .filter(|(k, d)| !d.prelude && !d.all_generics().is_empty() && !cg.used_defs.contains(*k))
+        .map(|(k, d)| (k.clone(), d.f.span))
+        .collect();
+    unchecked_generics.sort_by_key(|(_, s)| s.start);
+    if !errors.is_empty() {
+        return Ok(Compiled { object: None, unchecked_generics });
+    }
+    let object = if emit {
+        Some(cg.module.finish().emit().map_err(|e| internal(format!("writing object file: {e}")))?)
+    } else {
+        None
+    };
+    Ok(Compiled { object, unchecked_generics })
 }
 
 struct Codegen {
@@ -644,6 +719,10 @@ struct Codegen {
     traits: HashMap<String, TraitDef>,
     /// Trait impls by (trait, type key): the impl's type parameters, bounds and type.
     impls: HashMap<(String, String), ImplShape>,
+    /// False for `om check`: type-check only, without generating machine code.
+    emit: bool,
+    /// Definitions instantiated at least once.
+    used_defs: HashSet<String>,
     /// Generated drop and clone functions, by type.
     glue: HashMap<(Ty, Glue), FuncId>,
     glue_queue: Vec<(FuncId, Ty, Glue)>,
@@ -653,6 +732,8 @@ struct Codegen {
     glue_origins: HashMap<FuncId, Span>,
     /// The user's line responsible for the library code being compiled now.
     cur_origin: Option<Span>,
+    /// The user function being compiled now, if any.
+    user_fn_span: Option<Span>,
     needs_drop_cache: std::cell::RefCell<HashMap<Ty, bool>>,
 }
 
@@ -855,6 +936,59 @@ impl Codegen {
         Ok(if is_struct { Ty::Struct(t.name.clone(), a) } else { Ty::Enum(t.name.clone(), a) })
     }
 
+    /// Reject types too deep or too wide to compile. Without this, a few lines of
+    /// nested structs or generic recursion make the compiler hang or run out of memory.
+    fn check_size(&self, ty: &Ty, span: Span) -> CResult<()> {
+        let mut memo = HashMap::new();
+        let size = self.size_of(ty, 0, &mut memo);
+        if matches!(size, Some(w) if w <= MAX_TYPE_WIDTH) {
+            return Ok(());
+        }
+        // Huge types print as huge names, so shorten them.
+        let mut name = ty.to_string();
+        if name.len() > 60 {
+            let cut = (0..=57).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+            name = format!("{}...", &name[..cut]);
+        }
+        match size {
+            Some(w) => err(
+                format!("type {name} is too large: it holds {w} scalar values (the limit is {MAX_TYPE_WIDTH})"),
+                span,
+            ),
+            None => err(format!("type {name} nests too deeply (the limit is {MAX_TYPE_DEPTH} levels)"), span),
+        }
+    }
+
+    /// Scalar width of `ty`, saturating; `None` if it nests deeper than [`MAX_TYPE_DEPTH`].
+    fn size_of(&self, ty: &Ty, depth: usize, memo: &mut HashMap<Ty, usize>) -> Option<usize> {
+        if depth > MAX_TYPE_DEPTH {
+            return None;
+        }
+        if let Some(&w) = memo.get(ty) {
+            return Some(w);
+        }
+        let parts: Vec<Ty> = match ty {
+            Ty::Tuple(ts) => ts.clone(),
+            Ty::Struct(..) => self.fields(ty).into_iter().map(|(_, t)| t).collect(),
+            Ty::Enum(..) => self.variants(ty).into_iter().flat_map(|(_, ts)| ts).collect(),
+            _ => return Some(self.layout(ty).len()),
+        };
+        // Meeting `ty` again while measuring it means it holds itself through a
+        // pointer (`Box`, `Vec`): that costs one pointer, counted where it is
+        // stored. Direct self-containment is rejected by `check_not_recursive`.
+        memo.insert(ty.clone(), 0);
+        // Type arguments count toward depth even when a field does not use them.
+        for a in ty.args() {
+            self.size_of(a, depth + 1, memo)?;
+        }
+        let mut w: usize = usize::from(matches!(ty, Ty::Enum(..)));
+        for p in &parts {
+            w = w.saturating_add(self.size_of(p, depth + 1, memo)?);
+        }
+        memo.insert(ty.clone(), w);
+        Some(w)
+    }
+
     fn type_subst(generics: &[String], args: &[Ty]) -> Subst {
         generics.iter().cloned().zip(args.iter().cloned()).collect()
     }
@@ -935,6 +1069,18 @@ impl Codegen {
 
     /// Values are stored inline, so a type may not contain itself.
     fn check_not_recursive(&self, ty: &Ty, stack: &mut Vec<String>, span: Span) -> CResult<()> {
+        self.not_recursive(ty, stack, span, &mut HashSet::new())
+    }
+
+    /// `done` holds types already explored without finding a cycle. Without it,
+    /// `struct B { a: A, b: A }` chains take exponential time.
+    fn not_recursive(&self, ty: &Ty, stack: &mut Vec<String>, span: Span, done: &mut HashSet<Ty>) -> CResult<()> {
+        if done.contains(ty) {
+            return Ok(());
+        }
+        if stack.len() > MAX_TYPE_DEPTH {
+            return err(format!("type {ty} nests too deeply (the limit is {MAX_TYPE_DEPTH} levels)"), span);
+        }
         let children: Vec<Ty> = match ty {
             Ty::Struct(..) => self.fields(ty).into_iter().map(|(_, t)| t).collect(),
             Ty::Enum(..) => self.variants(ty).into_iter().flat_map(|(_, ts)| ts).collect(),
@@ -951,11 +1097,12 @@ impl Codegen {
             stack.push(name.to_string());
         }
         for c in &children {
-            self.check_not_recursive(c, stack, span)?;
+            self.not_recursive(c, stack, span, done)?;
         }
         if ty.base().is_some() {
             stack.pop();
         }
+        done.insert(ty.clone());
         Ok(())
     }
 
@@ -1068,7 +1215,8 @@ impl Codegen {
         let name = format!("om_{what}_{}", self.glue.len());
         let id = self.module.declare_function(&name, Linkage::Local, &sig).map_err(internal)?;
         self.glue.insert((ty.clone(), kind), id);
-        if let Some(o) = self.cur_origin {
+        // Glue needed by user code points at the user function that needed it.
+        if let Some(o) = self.cur_origin.or(self.user_fn_span) {
             self.glue_origins.insert(id, o);
         }
         self.glue_queue.push((id, ty.clone(), kind));
@@ -1145,6 +1293,18 @@ impl Codegen {
         if self.fns.contains_key(&inst) {
             return Ok(inst);
         }
+        if self.fns.len() >= MAX_INSTANCES {
+            return err(
+                format!(
+                    "too many generic instances (over {MAX_INSTANCES}); does a generic function call itself with a growing type?"
+                ),
+                span,
+            );
+        }
+        for t in subst.values() {
+            self.check_size(t, span)?;
+        }
+        self.used_defs.insert(key.to_string());
         let def = self.defs[key].clone();
         for b in def.impl_bounds.iter().chain(&def.f.bounds) {
             let t = &subst[&b.param];
@@ -1194,6 +1354,9 @@ impl Codegen {
             Some(t) => self.resolve(t, &subst)?,
             None => Ty::Unit,
         };
+        for t in params.iter().map(|p| &p.ty).chain([&ret]) {
+            self.check_size(t, span)?;
+        }
         let is_main = inst == "main";
         if is_main && !matches!(ret, Ty::Unit | Ty::I64) {
             return err("`main` must return nothing or an i64 exit code", f.span);
@@ -1207,7 +1370,9 @@ impl Codegen {
         };
         let id = self
             .module
-            .declare_function(&symbol, Linkage::Export, &sig)
+            // Only `main` is visible outside the object file, so Om functions can
+            // never collide with or interpose on C library symbols.
+            .declare_function(&symbol, if is_main { Linkage::Export } else { Linkage::Local }, &sig)
             .map_err(|e| CompileError { message: e.to_string(), span })?;
         self.fns.insert(inst.clone(), FnInfo { id, params, ret });
         self.origins.insert(inst.clone(), self.cur_origin.unwrap_or(span));
@@ -1278,9 +1443,11 @@ impl Codegen {
         lw.b.seal_all_blocks();
         lw.b.finalize(target);
 
-        self.module
-            .define_function(id, ctx)
-            .map_err(|e| CompileError { message: format!("codegen for `{inst}`: {e:?}"), span: f.span })?;
+        if self.emit {
+            self.module
+                .define_function(id, ctx)
+                .map_err(|e| CompileError { message: format!("codegen for `{inst}`: {e:?}"), span: f.span })?;
+        }
         self.module.clear_context(ctx);
         Ok(())
     }
@@ -1334,7 +1501,8 @@ impl Codegen {
         if let Some(&id) = self.strings.get(s) {
             return Ok(id);
         }
-        let name = format!("om_str_{}", self.strings.len());
+        // A `.` keeps string symbols apart from function symbols, which are `[A-Za-z0-9_]`.
+        let name = format!("om.str.{}", self.strings.len());
         let id = self.module.declare_data(&name, Linkage::Local, false, false).map_err(internal)?;
         let mut desc = DataDescription::new();
         let mut bytes = s.as_bytes().to_vec();
@@ -1505,7 +1673,8 @@ struct Lower<'a> {
     tmp_count: usize,
     /// While true, printing goes to stderr (used by `panic`).
     stderr: bool,
-    /// Compiling prelude code, which may use the private fields of `Vec`, `String` and `Box`.
+    /// Compiling prelude code, which alone may call `intrinsic::*` and use the
+    /// private fields of `Vec`, `String` and `Box`.
     in_prelude: bool,
     /// Set while starting to lower a function's body block, whose tail is the return value.
     fn_body: bool,
@@ -1554,6 +1723,7 @@ impl<'a> Lower<'a> {
         if BUILTINS.contains(&name) {
             return err(format!("`{name}` is the name of a built-in function"), span);
         }
+        self.cg.check_size(&ty, span)?;
         let layout = self.cg.layout(&ty);
         let mut vars = Vec::with_capacity(vals.len());
         for (t, v) in layout.into_iter().zip(vals) {
@@ -2727,7 +2897,11 @@ impl<'a> Lower<'a> {
             ExprKind::Unary(op, inner) => {
                 let (v, ty) = self.expr_expect(inner, expected)?;
                 match (op, &ty) {
-                    (UnOp::Neg, Ty::Int(t)) if t.signed() => Ok((vec![self.b.ins().ineg(v[0])], ty)),
+                    (UnOp::Neg, Ty::Int(t)) if t.signed() => {
+                        let is_min = self.b.ins().icmp_imm_s(IntCC::Equal, v[0], t.min() as i64);
+                        self.panic_if(is_min, "attempt to negate with overflow", e.span)?;
+                        Ok((vec![self.b.ins().ineg(v[0])], ty))
+                    }
                     (UnOp::Neg, Ty::Int(_)) => err(format!("cannot negate an unsigned {ty}"), e.span),
                     (UnOp::Neg, Ty::F32 | Ty::F64) => Ok((vec![self.b.ins().fneg(v[0])], ty)),
                     (UnOp::Not, Ty::Bool) => Ok((vec![self.b.ins().bxor_imm_u(v[0], 1)], Ty::Bool)),
@@ -3079,30 +3253,105 @@ impl<'a> Lower<'a> {
         Ok((vec![v], lt))
     }
 
+    /// Integer arithmetic. Like Rust's debug builds, but always on: overflow,
+    /// division by zero and over-wide shifts panic instead of wrapping silently or
+    /// killing the process with SIGFPE. `wrapping_*` methods opt out.
     fn int_binop(&mut self, op: BinOp, t: IntTy, l: Value, r: Value, span: Span) -> CResult<(Vals, Ty)> {
-        let ins = self.b.ins();
         let s = t.signed();
+        let checked = |this: &mut Self, v: Value, of: Value, what: &str| -> CResult<Value> {
+            this.panic_if(of, &format!("attempt to {what} with overflow"), span)?;
+            Ok(v)
+        };
         let v = match op {
-            BinOp::Add => ins.iadd(l, r),
-            BinOp::Sub => ins.isub(l, r),
-            BinOp::Mul => ins.imul(l, r),
-            BinOp::Div if s => ins.sdiv(l, r),
-            BinOp::Div => ins.udiv(l, r),
-            BinOp::Rem if s => ins.srem(l, r),
-            BinOp::Rem => ins.urem(l, r),
-            BinOp::BitAnd => ins.band(l, r),
-            BinOp::BitOr => ins.bor(l, r),
-            BinOp::BitXor => ins.bxor(l, r),
-            BinOp::Shl => ins.ishl(l, r),
-            BinOp::Shr if s => ins.sshr(l, r),
-            BinOp::Shr => ins.ushr(l, r),
+            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                let ins = self.b.ins();
+                let (v, of) = match (op, s) {
+                    (BinOp::Add, true) => ins.sadd_overflow(l, r),
+                    (BinOp::Add, false) => ins.uadd_overflow(l, r),
+                    (BinOp::Sub, true) => ins.ssub_overflow(l, r),
+                    (BinOp::Sub, false) => ins.usub_overflow(l, r),
+                    (_, true) => ins.smul_overflow(l, r),
+                    (_, false) => ins.umul_overflow(l, r),
+                };
+                let what = match op {
+                    BinOp::Add => "add",
+                    BinOp::Sub => "subtract",
+                    _ => "multiply",
+                };
+                checked(self, v, of, what)?
+            }
+            BinOp::Div | BinOp::Rem => {
+                let div = op == BinOp::Div;
+                let zero = self.b.ins().icmp_imm_u(IntCC::Equal, r, 0);
+                let msg = if div {
+                    "attempt to divide by zero"
+                } else {
+                    "attempt to calculate the remainder with a divisor of zero"
+                };
+                self.panic_if(zero, msg, span)?;
+                if s {
+                    // MIN / -1 does not fit, and traps in hardware.
+                    let is_min = self.b.ins().icmp_imm_s(IntCC::Equal, l, t.min() as i64);
+                    let is_neg1 = self.b.ins().icmp_imm_s(IntCC::Equal, r, -1);
+                    let both = self.b.ins().band(is_min, is_neg1);
+                    let msg = if div {
+                        "attempt to divide with overflow"
+                    } else {
+                        "attempt to calculate the remainder with overflow"
+                    };
+                    self.panic_if(both, msg, span)?;
+                }
+                let ins = self.b.ins();
+                match (div, s) {
+                    (true, true) => ins.sdiv(l, r),
+                    (true, false) => ins.udiv(l, r),
+                    (false, true) => ins.srem(l, r),
+                    (false, false) => ins.urem(l, r),
+                }
+            }
+            BinOp::Shl | BinOp::Shr => {
+                // The amount is compared unsigned, so a negative amount also panics.
+                let too_far = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, r, t.bits() as i64);
+                let what = if op == BinOp::Shl { "shift left" } else { "shift right" };
+                self.panic_if(too_far, &format!("attempt to {what} with overflow"), span)?;
+                let ins = self.b.ins();
+                match (op, s) {
+                    (BinOp::Shl, _) => ins.ishl(l, r),
+                    (_, true) => ins.sshr(l, r),
+                    (_, false) => ins.ushr(l, r),
+                }
+            }
+            BinOp::BitAnd => self.b.ins().band(l, r),
+            BinOp::BitOr => self.b.ins().bor(l, r),
+            BinOp::BitXor => self.b.ins().bxor(l, r),
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let cc = if s { sint_cc(op) } else { uint_cc(op) };
-                return Ok((vec![ins.icmp(cc, l, r)], Ty::Bool));
+                return Ok((vec![self.b.ins().icmp(cc, l, r)], Ty::Bool));
             }
             BinOp::And | BinOp::Or => return err(format!("`{}` needs bools, found {}", op.symbol(), t.name()), span),
         };
         Ok((vec![v], Ty::Int(t)))
+    }
+
+    /// Branch to a cold block that panics with `msg` when `cond` is true.
+    fn panic_if(&mut self, cond: Value, msg: &str, span: Span) -> CResult<()> {
+        let ok = self.b.create_block();
+        let fail = self.b.create_block();
+        self.b.set_cold_block(fail);
+        self.b.ins().brif(cond, fail, &[], ok, &[]);
+        self.b.switch_to_block(fail);
+        self.b.seal_block(fail);
+        let was_dead = self.dead;
+        let p = self.str_val(msg)?[0];
+        let id = self.cg.runtime_fn("om_rt_panic_str", Some(types::I64))?;
+        let f = self.cg.module.declare_func_in_func(id, self.b.func);
+        self.b.ins().call(f, &[p]);
+        self.b.ins().trap(TrapCode::unwrap_user(3));
+        self.b.switch_to_block(ok);
+        self.b.seal_block(ok);
+        self.dead = was_dead;
+        let _ = span;
+        Ok(())
     }
 
     /// Store `vals` in a fresh variable and return an argument that reads it (as `&` if `by_ref`).
@@ -3541,6 +3790,9 @@ impl<'a> Lower<'a> {
 
     fn call(&mut self, name: &str, args: &[Arg], span: Span, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
         if let Some(op) = name.strip_prefix("intrinsic::") {
+            if !self.in_prelude {
+                return err(format!("`{name}` is internal to the prelude; call the public method instead"), span);
+            }
             return self.intrinsic(op, args, span, expected);
         }
         match name {
@@ -3857,9 +4109,21 @@ impl<'a> Lower<'a> {
     }
 
     fn alloc(&mut self, count: Value, elem: &Ty) -> CResult<Value> {
-        let (_, stride, _) = self.cg.mem_layout(elem);
-        let bytes = self.b.ins().imul_imm_s(count, stride as i64);
+        let bytes = self.alloc_bytes(count, elem)?;
         Ok(self.rt("om_rt_alloc", &[types::I64], Some(types::I64), &[bytes])?.unwrap())
+    }
+
+    /// Bytes for `count` elements of `elem`, panicking like Rust ("capacity
+    /// overflow") when that does not fit in an `isize`. Without this check a
+    /// huge count wraps to a small allocation and later writes run past it.
+    fn alloc_bytes(&mut self, count: Value, elem: &Ty) -> CResult<Value> {
+        let (_, stride, _) = self.cg.mem_layout(elem);
+        let stride = self.b.ins().iconst(types::I64, stride as i64);
+        let (bytes, wrapped) = self.b.ins().umul_overflow(count, stride);
+        let negative = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, bytes, 0);
+        let bad = self.b.ins().bor(wrapped, negative);
+        self.panic_if(bad, "capacity overflow", Span::default())?;
+        Ok(bytes)
     }
 
     /// Build a `Vec[elem]` value from its buffer, length and capacity.
@@ -4042,6 +4306,11 @@ impl<'a> Lower<'a> {
                 return Ok((vec![self.int_resize(r, same_unsigned, IntTy::U32)], Ty::Int(IntTy::U32)));
             }
             ("u32_to_char", Ty::Int(IntTy::U32)) => return Ok((vec![x], Ty::Char)),
+            ("wrapping_add" | "wrapping_sub" | "wrapping_mul", Ty::Int(_)) if vals.len() == 2 => match op {
+                "wrapping_add" => ins.iadd(x, vals[1]),
+                "wrapping_sub" => ins.isub(x, vals[1]),
+                _ => ins.imul(x, vals[1]),
+            },
             (f, Ty::F64) if f.starts_with("libm_") => {
                 let params = vec![types::F64; vals.len()];
                 let id = self.cg.runtime_fn_sig(&format!("om_rt_math_{}", &f[5..]), &params, types::F64)?;
@@ -4097,8 +4366,7 @@ impl<'a> Lower<'a> {
             }
             "ptr_realloc" => {
                 let t = ptr_elem(0)?;
-                let (_, stride, _) = self.cg.mem_layout(&t);
-                let bytes = self.b.ins().imul_imm_s(a[1][0], stride as i64);
+                let bytes = self.alloc_bytes(a[1][0], &t)?;
                 let p = self.rt("om_rt_realloc", &[types::I64, types::I64], Some(types::I64), &[a[0][0], bytes])?;
                 Ok((vec![p.unwrap()], tys[0].clone()))
             }
@@ -5458,7 +5726,8 @@ double om_rt_parse_f64(const char *s, long long n) {
     }
     char *end;
     double x = strtod(buf, &end);
-    om_parse_ok_ = *end == 0;
+    /* The whole text must be the number: an embedded NUL byte does not end it. */
+    om_parse_ok_ = end == buf + n;
     return x;
 }
 char om_rt_parse_ok(void) { return om_parse_ok_; }
@@ -5715,6 +5984,7 @@ long long om_rt_read_line_len(void) { return om_line_len_; }
 char om_rt_read_line_ok(void) { return om_line_ok_; }
 void om_rt_memmove(void *dst, const void *src, long long n) { if (n > 0) memmove(dst, src, (size_t)n); }
 int om_rt_memcmp(const void *a, const void *b, long long n) { return n > 0 ? memcmp(a, b, (size_t)n) : 0; }
+int om_rt_panic_str(const char *msg) { fflush(stdout); fprintf(stderr, "panic: %s\n", msg); exit(101); }
 "#;
 
 #[cfg(test)]

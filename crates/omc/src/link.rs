@@ -15,17 +15,19 @@ use std::process::Command;
 
 /// Link `object` with the runtime into the executable `out`.
 pub fn link(object: &[u8], out: &Path) -> Result<(), String> {
-    let dir = Scratch::new()?;
-    let obj_path = dir.0.join(if cfg!(windows) { "program.obj" } else { "program.o" });
-    let rt_path = dir.0.join("om_runtime.c");
-    std::fs::write(&obj_path, object).map_err(|e| format!("writing object file: {e}"))?;
-    std::fs::write(&rt_path, om_codegen::RUNTIME_C).map_err(|e| format!("writing runtime: {e}"))?;
+    // A fresh, random, owner-only directory (see `TempDir`): a predictable
+    // name in a shared temp dir could be raced by another local user.
+    let dir = crate::TempDir::new().map_err(|e| format!("creating temp dir: {e}"))?;
+    let obj_path = dir.path().join(if cfg!(windows) { "program.obj" } else { "program.o" });
+    let rt_path = dir.path().join("om_runtime.c");
+    crate::write_new(&obj_path, object).map_err(|e| format!("writing object file: {e}"))?;
+    crate::write_new(&rt_path, om_codegen::RUNTIME_C.as_bytes()).map_err(|e| format!("writing runtime: {e}"))?;
     // Tools run inside the scratch directory (cl.exe drops files in the current
     // directory), so the output path must not depend on the current directory.
     let out = absolute(out)?;
     let tool = find_tool()?;
     let mut cmd = tool.command();
-    cmd.current_dir(&dir.0);
+    cmd.current_dir(dir.path());
     if tool.msvc {
         cmd.args(["/nologo", "/O2"]).arg(&obj_path).arg(&rt_path);
         let mut fe = OsString::from("/Fe:");
@@ -139,31 +141,10 @@ fn on_path(name: &str) -> bool {
     })
 }
 
-fn absolute(p: &Path) -> Result<PathBuf, String> {
+pub(crate) fn absolute(p: &Path) -> Result<PathBuf, String> {
     if p.is_absolute() {
         return Ok(p.to_path_buf());
     }
     let cwd = std::env::current_dir().map_err(|e| format!("reading the current directory: {e}"))?;
     Ok(cwd.join(p))
-}
-
-/// A private scratch directory, removed on drop.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new() -> Result<Scratch, String> {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let nanos =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("om-{}-{nanos}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| format!("creating temp dir: {e}"))?;
-        Ok(Scratch(dir))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
