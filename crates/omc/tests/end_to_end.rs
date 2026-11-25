@@ -588,3 +588,12 @@ fn boxes_and_recursive_types() {
     let want = std::fs::read_to_string(dir.join("boxes.expected")).unwrap();
     assert_eq!(build_and_run(&src, "boxes"), want);
 }
+
+#[test]
+fn float_printing_matches_rust() {
+    // `print(x)` matches Rust's `{}`; floats inside other values match `{:?}`.
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("floats.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("floats.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "floats"), want);
+}
