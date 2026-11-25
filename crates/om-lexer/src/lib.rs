@@ -26,8 +26,14 @@ impl Span {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Literals and names
-    Int(i64),
-    Float(f64),
+    /// An integer literal and its optional type suffix (`5u8`).
+    Int(u64, Option<String>),
+    /// A float literal and its optional type suffix (`1.5f32`).
+    Float(f64, Option<String>),
+    /// `'a'`
+    Char(char),
+    /// `'outer`, a loop label.
+    Label(String),
     Str(String),
     /// A string containing `{expr}` interpolations.
     InterpStr(Vec<StrPart>),
@@ -85,6 +91,11 @@ pub enum TokenKind {
     StarEq,
     SlashEq,
     PercentEq,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    ShlEq,
+    ShrEq,
     // Operators
     Plus,
     Minus,
@@ -102,6 +113,9 @@ pub enum TokenKind {
     OrOr,
     /// `|>`, the pipeline operator.
     PipeGt,
+    Caret,
+    Shl,
+    Shr,
     Bang,
     Eof,
 }
@@ -110,8 +124,10 @@ impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use TokenKind::*;
         let s = match self {
-            Int(n) => return write!(f, "integer `{n}`"),
-            Float(n) => return write!(f, "number `{n}`"),
+            Int(n, _) => return write!(f, "integer `{n}`"),
+            Char(c) => return write!(f, "character {c:?}"),
+            Label(l) => return write!(f, "label `'{l}`"),
+            Float(n, _) => return write!(f, "number `{n}`"),
             Str(_) | InterpStr(_) => "string literal",
             Ident(name) => return write!(f, "identifier `{name}`"),
             Fn => "`fn`",
@@ -160,6 +176,11 @@ impl fmt::Display for TokenKind {
             StarEq => "`*=`",
             SlashEq => "`/=`",
             PercentEq => "`%=`",
+            AmpEq => "`&=`",
+            PipeEq => "`|=`",
+            CaretEq => "`^=`",
+            ShlEq => "`<<=`",
+            ShrEq => "`>>=`",
             Plus => "`+`",
             Minus => "`-`",
             Star => "`*`",
@@ -175,6 +196,9 @@ impl fmt::Display for TokenKind {
             AndAnd => "`&&`",
             OrOr => "`||`",
             PipeGt => "`|>`",
+            Caret => "`^`",
+            Shl => "`<<`",
+            Shr => "`>>`",
             Bang => "`!`",
             Eof => "end of file",
         };
@@ -235,6 +259,7 @@ impl<'a> Lexer<'a> {
             let kind = match c {
                 b'0'..=b'9' => self.number()?,
                 b'"' => self.string()?,
+                b'\'' => self.quote()?,
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident(),
                 _ => self.punct()?,
             };
@@ -283,23 +308,122 @@ impl<'a> Lexer<'a> {
 
     fn number(&mut self) -> Result<TokenKind, LexError> {
         let start = self.pos;
-        while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
-            self.pos += 1;
+        let radix = match (self.peek(0), self.peek(1)) {
+            (Some(b'0'), Some(b'x')) => 16,
+            (Some(b'0'), Some(b'o')) => 8,
+            (Some(b'0'), Some(b'b')) => 2,
+            _ => 10,
+        };
+        if radix != 10 {
+            self.pos += 2;
         }
-        // `1.5` is a float; `1..5` is a range and `1.max()` a method call.
-        if self.peek(0) == Some(b'.') && matches!(self.peek(1), Some(b'0'..=b'9')) {
-            self.pos += 1;
-            while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
+        let digits_start = self.pos;
+        while let Some(c) = self.peek(0) {
+            if c == b'_' || (c as char).is_digit(radix) {
                 self.pos += 1;
+            } else {
+                break;
             }
-            let text: String = self.src[start..self.pos].chars().filter(|&c| c != '_').collect();
-            return Ok(TokenKind::Float(text.parse().unwrap()));
+        }
+        let digits: String = self.src[digits_start..self.pos].chars().filter(|&c| c != '_').collect();
+        if digits.is_empty() {
+            return self.err("missing digits after the number prefix", start);
+        }
+        let mut is_float = false;
+        if radix == 10 {
+            // `1.5` is a float; `1..5` is a range and `1.max()` a method call.
+            if self.peek(0) == Some(b'.') && matches!(self.peek(1), Some(b'0'..=b'9')) {
+                is_float = true;
+                self.pos += 1;
+                while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
+                    self.pos += 1;
+                }
+            }
+            // Exponent: `1e9`, `2.5e-3`.
+            let exp_digit = |o: usize| matches!(self.peek(o), Some(b'0'..=b'9'));
+            if matches!(self.peek(0), Some(b'e' | b'E'))
+                && (exp_digit(1) || (matches!(self.peek(1), Some(b'+' | b'-')) && exp_digit(2)))
+            {
+                is_float = true;
+                self.pos += 2;
+                while matches!(self.peek(0), Some(b'0'..=b'9' | b'_')) {
+                    self.pos += 1;
+                }
+            }
         }
         let text: String = self.src[start..self.pos].chars().filter(|&c| c != '_').collect();
-        match text.parse::<i64>() {
-            Ok(n) => Ok(TokenKind::Int(n)),
+        let suffix_start = self.pos;
+        while matches!(self.peek(0), Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')) {
+            self.pos += 1;
+        }
+        let suffix = &self.src[suffix_start..self.pos];
+        let suffix = match suffix {
+            "" => None,
+            "f32" | "f64" if radix == 10 => {
+                return Ok(TokenKind::Float(text.parse().unwrap(), Some(suffix.to_string())));
+            }
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" if !is_float => {
+                Some(suffix.to_string())
+            }
+            _ => return self.err(format!("invalid suffix `{suffix}` on a number"), suffix_start),
+        };
+        if is_float {
+            return Ok(TokenKind::Float(text.parse().unwrap(), None));
+        }
+        match u64::from_str_radix(&digits, radix) {
+            Ok(n) => Ok(TokenKind::Int(n, suffix)),
             Err(_) => self.err(format!("integer literal `{text}` does not fit in 64 bits"), start),
         }
+    }
+
+    /// `'a'` (a character) or `'outer` (a loop label).
+    fn quote(&mut self) -> Result<TokenKind, LexError> {
+        let start = self.pos;
+        self.pos += 1;
+        let Some(c) = self.src[self.pos..].chars().next() else {
+            return self.err("unterminated character literal", start);
+        };
+        let value = if c == '\\' {
+            let esc = self.peek(1);
+            self.pos += 2;
+            match esc {
+                Some(b'n') => '\n',
+                Some(b't') => '\t',
+                Some(b'r') => '\r',
+                Some(b'0') => '\0',
+                Some(b'\\') => '\\',
+                Some(b'\'') => '\'',
+                Some(b'"') => '"',
+                Some(b'u') if self.peek(0) == Some(b'{') => {
+                    let close = self.src[self.pos..].find('}').map(|i| self.pos + i);
+                    let code = close.and_then(|e| u32::from_str_radix(&self.src[self.pos + 1..e], 16).ok());
+                    match (close, code.and_then(char::from_u32)) {
+                        (Some(e), Some(ch)) => {
+                            self.pos = e + 1;
+                            ch
+                        }
+                        _ => return self.err("invalid unicode escape; write it like `\\u{1F600}`", start),
+                    }
+                }
+                _ => return self.err("unknown escape sequence", start + 1),
+            }
+        } else if self.src[self.pos + c.len_utf8()..].starts_with('\'') {
+            self.pos += c.len_utf8();
+            c
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let name_start = self.pos;
+            while matches!(self.peek(0), Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')) {
+                self.pos += 1;
+            }
+            return Ok(TokenKind::Label(self.src[name_start..self.pos].to_string()));
+        } else {
+            return self.err("unterminated character literal", start);
+        };
+        if self.peek(0) != Some(b'\'') {
+            return self.err("unterminated character literal", start);
+        }
+        self.pos += 1;
+        Ok(TokenKind::Char(value))
     }
 
     fn string(&mut self) -> Result<TokenKind, LexError> {
@@ -420,6 +544,14 @@ impl<'a> Lexer<'a> {
         let two = (self.peek(0).unwrap(), self.peek(1));
         let (kind, len) = match two {
             (b'.', Some(b'.')) if self.peek(2) == Some(b'=') => (DotDotEq, 3),
+            (b'<', Some(b'<')) if self.peek(2) == Some(b'=') => (ShlEq, 3),
+            (b'>', Some(b'>')) if self.peek(2) == Some(b'=') => (ShrEq, 3),
+            (b'<', Some(b'<')) => (Shl, 2),
+            (b'>', Some(b'>')) => (Shr, 2),
+            (b'&', Some(b'=')) => (AmpEq, 2),
+            (b'|', Some(b'=')) => (PipeEq, 2),
+            (b'^', Some(b'=')) => (CaretEq, 2),
+            (b'^', _) => (Caret, 1),
             (b'.', Some(b'.')) => (DotDot, 2),
             (b'.', _) => (Dot, 1),
             (b':', Some(b':')) => (ColonColon, 2),
@@ -505,12 +637,12 @@ mod tests {
             vec![
                 Ident("a".into()),
                 LtEq,
-                Int(1000),
+                Int(1000, None),
                 AndAnd,
                 Ident("b".into()),
                 NotEq,
                 Minus,
-                Int(2),
+                Int(2, None),
                 Arrow,
                 Ident("x".into()),
                 Eof
@@ -551,13 +683,13 @@ mod tests {
         assert_eq!(
             kinds("0..10 1..=2 3.25 a.b A::B x += 1 =>"),
             vec![
-                Int(0),
+                Int(0, None),
                 DotDot,
-                Int(10),
-                Int(1),
+                Int(10, None),
+                Int(1, None),
                 DotDotEq,
-                Int(2),
-                Float(3.25),
+                Int(2, None),
+                Float(3.25, None),
                 Ident("a".into()),
                 Dot,
                 Ident("b".into()),
@@ -566,7 +698,7 @@ mod tests {
                 Ident("B".into()),
                 Ident("x".into()),
                 PlusEq,
-                Int(1),
+                Int(1, None),
                 FatArrow,
                 Eof
             ]
@@ -589,5 +721,47 @@ mod tests {
         assert!(lex("\"open").unwrap_err().message.contains("unterminated"));
         assert!(lex("let @").unwrap_err().message.contains("unexpected character"));
         assert!(lex("99999999999999999999").unwrap_err().message.contains("64 bits"));
+    }
+}
+
+#[cfg(test)]
+mod literal_tests {
+    use super::*;
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        lex(src).unwrap().into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn number_forms_and_suffixes() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("0xff 0o17 0b1010 5u8 2.5f32 1e3 18446744073709551615"),
+            vec![
+                Int(255, None),
+                Int(15, None),
+                Int(10, None),
+                Int(5, Some("u8".into())),
+                Float(2.5, Some("f32".into())),
+                Float(1000.0, None),
+                Int(u64::MAX, None),
+                Eof
+            ]
+        );
+        assert!(lex("5x").is_err());
+        assert!(lex("1.5u8").is_err());
+    }
+
+    #[test]
+    fn chars_labels_and_bit_operators() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds(r"'a' '\n' '\'' '\u{e9}' 'é' 'outer"),
+            vec![Char('a'), Char('\n'), Char('\''), Char('é'), Char('é'), Label("outer".into()), Eof]
+        );
+        assert_eq!(
+            kinds("a << b >>= c ^ d"),
+            vec![Ident("a".into()), Shl, Ident("b".into()), ShrEq, Ident("c".into()), Caret, Ident("d".into()), Eof]
+        );
     }
 }

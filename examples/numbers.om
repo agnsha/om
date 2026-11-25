@@ -1,0 +1,51 @@
+// Integer types, bit operations, chars and loop labels.
+
+// FNV-1a, a classic 64-bit hash, written with u64 wrapping arithmetic.
+fn fnv1a_step(h: u64, byte: u8) -> u64 {
+    (h ^ byte as u64).wrapping_mul(0x100000001b3)
+}
+
+fn fnv1a(word: (u8, u8, u8)) -> u64 {
+    let (a, b, c) = word
+    0xcbf29ce484222325 |> fnv1a_step(a) |> fnv1a_step(b) |> fnv1a_step(c)
+}
+
+fn classify(c: char) -> str {
+    match c {
+        '0'..='9' => "digit",
+        'a'..='z' | 'A'..='Z' => "letter",
+        ' ' | '\t' | '\n' => "space",
+        _ => "other",
+    }
+}
+
+fn first_factor_pair(target: i32) -> Option[(i32, i32)] {
+    let mut found: Option[(i32, i32)] = None
+    'search: for i in 1i32..20 {
+        for j in i..20 {
+            if i * j == target {
+                found = Some((i, j))
+                break 'search
+            }
+        }
+    }
+    found
+}
+
+fn main() {
+    print(fnv1a(('o' as u8, 'm' as u8, '!' as u8)))
+    print(u8::MAX)
+    print(i16::MIN)
+    print(0b1011_0000 >> 4)
+    print(0xFFu8.count_ones())
+    print(1u64 << 63)
+    print(-1i32 as u32)
+    print(classify('7'))
+    print(classify('Q'))
+    print(classify('!'))
+    print('a'.to_ascii_uppercase())
+    print('f'.to_digit(16))
+    print(first_factor_pair(42))
+    print(2.0f32.sqrt())
+    print(10.0.ln())
+}

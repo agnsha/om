@@ -55,9 +55,13 @@ pub fn build(src: &str, out: &Path) -> Result<(), Diagnostic> {
     std::fs::write(&rt_path, om_codegen::RUNTIME_C).map_err(|e| Diagnostic::plain(format!("writing runtime: {e}")))?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
     let status =
-        Command::new(&cc).arg(&obj_path).arg(&rt_path).arg("-O2").arg("-o").arg(out).status().map_err(|e| {
-            Diagnostic::plain(format!("could not run the linker `{cc}`: {e}. Install a C compiler (cc, gcc or clang)."))
-        })?;
+        Command::new(&cc).arg(&obj_path).arg(&rt_path).arg("-O2").arg("-lm").arg("-o").arg(out).status().map_err(
+            |e| {
+                Diagnostic::plain(format!(
+                    "could not run the linker `{cc}`: {e}. Install a C compiler (cc, gcc or clang)."
+                ))
+            },
+        )?;
     let _ = std::fs::remove_dir_all(&dir);
     if !status.success() {
         return Err(Diagnostic::plain(format!("linking failed ({status})")));

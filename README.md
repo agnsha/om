@@ -112,7 +112,8 @@ See [`examples/modern.om`](examples/modern.om) and the [language reference](docs
 
 ## The language today
 
-- Types: `i64`, `f64`, `bool`, `str` (string literals), tuples, structs and enums
+- Types: every integer type from `i8` to `u64` plus `isize`/`usize`, `f32`, `f64`, `bool`, `char`, `str` (string literals), tuples, structs and enums
+- Bitwise operators, hex/binary literals and suffixes, loop labels, and Rust's common number and char methods
 - Generic functions, structs, enums and `impl` blocks, monomorphized like Rust
 - Traits with default methods, bounds and `where` clauses; operator overloading through `Add`, `Eq`, `Ord` and friends
 - `Option[T]` and `Result[T, E]` with `?`, `unwrap`, `expect`, `unwrap_or` and more
@@ -159,8 +160,8 @@ The compiler is written in Rust and split into small crates. See
 | 0.5 | Default and named arguments, `\|>`, string interpolation, `defer` | ✅ done |
 | 1 | Loops, `f64`, structs, methods, enums, `match`, `&`/`&mut` parameters | ✅ done |
 | 2 | Generics, `Option`/`Result` and `?`, tuples, `if let`/`while let`, panics | ✅ done |
-| 2.5 | Traits, bounds, operator overloading; then more integer types, `char`, arrays, loop labels | in progress |
-| 3 | Heap types (`String`, `Vec`, `Box`), move checking, closures, iterators | planned |
+| 2.5 | Traits, bounds, operator overloading, all integer types, `f32`, `char`, bit operations, loop labels | ✅ done |
+| 3 | Memory model: arrays, `String`, `Vec`, `Box`, move checking, closures, iterators | next |
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
 | 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |

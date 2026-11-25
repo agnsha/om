@@ -14,15 +14,34 @@ later phases are in the [design document](design.md).
 
 | Type | Meaning |
 |---|---|
-| `i64` | 64-bit signed integer. Arithmetic currently wraps on overflow. |
-| `f64` | 64-bit float. Literals need a digit after the dot: `1.0`, `0.5`. |
+| `i8 i16 i32 i64 isize` | Signed integers. `isize` is 64-bit on the 64-bit targets Om supports. |
+| `u8 u16 u32 u64 usize` | Unsigned integers. |
+| `f32`, `f64` | Floats. Literals need a digit after the dot (`1.0`), or an exponent (`1e9`). |
 | `bool` | `true` or `false` |
+| `char` | A Unicode scalar value: `'a'`, `'\n'`, `'\u{1F600}'`. |
 | `str` | A string literal. Strings can be stored, passed and printed, not yet built at runtime. |
 | `(A, B, ...)` | A tuple. Read fields with `.0`, `.1`, or destructure with `let (a, b) = t`. |
 | `Option[T]`, `Result[T, E]` | Built in, see below. |
 
-Integer literals may use `_` as a separator: `1_000_000`.
-String escapes: `\n \t \r \0 \\ \"`.
+Integer literals may use `_` as a separator (`1_000_000`), and can be written
+in hex, octal or binary: `0xFF`, `0o17`, `0b1010`. A suffix fixes the type:
+`5u8`, `1_000i64`, `2.5f32`.
+
+An unsuffixed literal takes its type from its context, as in Rust:
+`let x: u8 = 200`, `f(3)` when `f` takes a `u16`, `x + 1` when `x: u32`. With
+no context it is `i64` (or `f64`). Unlike Rust, Om infers this locally, from
+the surrounding expression, not from later uses in the function; write
+`for i in 0u32..n` or annotate the variable when it matters. A literal that does
+not fit its type, such as `let x: u8 = 256`, is an error.
+
+Integer arithmetic currently wraps on overflow (Rust panics in debug builds and
+wraps in release builds); `checked_add`, `saturating_add` and friends are there
+when you want overflow handled explicitly.
+
+String and char escapes: `\n \t \r \0 \\ \" \' \u{...}`.
+
+`i8::MIN`, `u64::MAX`, `u32::BITS`, `f64::EPSILON`, `f64::INFINITY`, `f64::NAN`
+and `char::MAX` are available.
 
 ### String interpolation
 
@@ -198,7 +217,19 @@ let found = loop {               // `loop` can return a value with `break`
 ```
 
 `break` leaves the innermost loop and `continue` skips to its next iteration.
-Compound assignment works on variables and fields: `+= -= *= /= %=`.
+A label lets them target an outer loop:
+
+```om
+'rows: for y in 0..h {
+    for x in 0..w {
+        if grid(x, y) == target { break 'rows }
+        if skip(x) { continue 'rows }
+    }
+}
+```
+
+A labelled `loop` can also `break 'label value`. `for` works over any integer
+type, and `0..=u8::MAX` ends correctly without overflowing.
 
 Conditions must be `bool`; `if 1 { }` is an error.
 
@@ -247,10 +278,18 @@ From lowest to highest precedence:
 |---|---|
 | `\|\|` | bool, short-circuit |
 | `&&` | bool, short-circuit |
-| `== != < <= > >=` | `==` and `!=` on i64 and bool; ordering on i64 |
-| `+ -` | i64 |
-| `* / %` | i64. Division by zero stops the program. |
-| unary `-` `!` | i64, bool |
+| `== != < <= > >=` | numbers and `char`; `==` and `!=` also on `bool`; any type with `Eq` / `Ord` |
+| `\|` | bitwise or, on integers and `bool` |
+| `^` | bitwise xor |
+| `&` | bitwise and |
+| `<< >>` | shifts; `>>` is arithmetic on signed types and logical on unsigned ones |
+| `+ -` | numbers |
+| `* / %` | numbers. Integer division by zero stops the program. |
+| `as` | casts, see below |
+| unary `-` `!` | `-` on signed integers and floats; `!` on `bool` (not) and integers (bitwise not) |
+
+This is the same precedence as Rust. Compound assignment works for all of
+them: `+= -= *= /= %= &= |= ^= <<= >>=`.
 
 `|>` (pipeline) binds loosest of all. `x |> f(a, b)` means `f(x, a, b)`, and
 `x |> f` means `f(x)`. Chains read left to right:
@@ -261,6 +300,26 @@ let result = 3 |> double |> add(4) |> square    // square(add(double(3), 4)) = 1
 
 *Why:* Rust needs nested calls or method syntax on a trait. Pipelines are a
 favourite in Elixir, F# and Gleam, and JavaScript has a proposal for one.
+
+## Number and char methods
+
+Integers: `pow`, `abs`, `signum`, `rem_euclid`, `count_ones`,
+`leading_zeros`, `trailing_zeros`, `is_power_of_two`, `checked_add/sub/mul/div`,
+`saturating_add/sub`, `wrapping_add/sub/mul`, plus `min`, `max`, `clamp` and
+`cmp` from `Ord`.
+
+Floats: `sqrt`, `floor`, `ceil`, `round`, `trunc`, `fract`, `abs`, `signum`,
+`powi`, `powf`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`,
+`ln`, `log2`, `log10`, `cbrt`, `hypot`, `is_nan`, `is_finite`,
+`is_infinite`, `to_degrees`, `to_radians`.
+
+`char`: `is_ascii_digit`, `is_ascii_alphabetic`, `is_ascii_alphanumeric`,
+`is_ascii_whitespace`, `is_ascii_punctuation`, `is_whitespace`, `to_digit`,
+`is_digit`, `to_ascii_uppercase`, `to_ascii_lowercase`, `len_utf8`,
+`char::from_digit`, `char::from_u32`.
+
+These are written in Om in the prelude. `sqrt`, `floor`, `count_ones` and the
+like compile to single machine instructions.
 
 ## Generics
 

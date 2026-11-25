@@ -170,10 +170,7 @@ fn floats_and_casts() {
             print(1e3 == 1000.0)
         }
     "#;
-    // 1e3 is not valid Om yet; it reads as `1` then a name, so check that separately.
-    assert!(omc::compile(src).is_err());
-    let src = src.replace("print(1e3 == 1000.0)", "print(-0.5)");
-    assert_eq!(build_and_run(&src, "floats"), "0.30000000000000004\n6.28318\n0.25\n3.5\n3\n-2\n2\ntrue\n-0.5\n");
+    assert_eq!(build_and_run(src, "floats"), "0.30000000000000004\n6.28318\n0.25\n3.5\n3\n-2\n2\ntrue\ntrue\n");
 }
 
 #[test]
@@ -271,7 +268,7 @@ fn rejects_bad_programs() {
         ("fn f() -> i64 { defer { return 1 } 2 } fn main() {}", "not allowed inside `defer`"),
         ("fn main() { print(1 |> 2) }", "right side of `|>`"),
         ("enum E { A, B } fn main() { match E::A { E::A => 1 } }", "missing: E::B "),
-        ("fn main() { let x = match 3 { 1 => 1 } }", "missing: _"),
+        ("fn main() { let x = match 3 { 1 => 1 } }", "missing: i64::MIN..=0"),
         ("fn main() { match true { true => 1 } }", "missing: false"),
         ("enum T { N(i64, bool) } fn main() { match T::N(1, true) { T::N(_, true) => 1 } }", "missing: T::N(_, false)"),
         ("struct P { x: i64 } fn main() { let p = P { x: 1 }; p.x = 2 }", "cannot assign twice to `p`"),
@@ -461,6 +458,37 @@ fn rejects_bad_trait_programs() {
             "struct W[T] { v: T } struct A {} impl[T: Eq] Eq for W[T] { fn eq(&self, o: &W[T]) -> bool { true } } fn main() { print(W { v: A {} } == W { v: A {} }) }",
             "not defined for W[A]",
         ),
+    ];
+    for (src, want) in cases {
+        let got = compile_error(src);
+        assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
+    }
+}
+
+#[test]
+fn integer_types_chars_bits_and_labels() {
+    // Each line of the expected output was checked against what Rust prints.
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("numbers_and_chars.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("numbers_and_chars.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "numbers"), want);
+}
+
+#[test]
+fn rejects_bad_number_programs() {
+    let cases = [
+        ("fn main() { let x: u8 = 256 }", "does not fit in u8"),
+        ("fn main() { let x: i8 = -129 }", "does not fit in i8"),
+        ("fn main() { let x: u8 = 1; let y = -x }", "cannot negate an unsigned u8"),
+        ("fn main() { let a: u8 = 1; let b: i32 = 2; let c = a + b }", "mismatched types: u8 + i32"),
+        ("fn main() { loop { break 'nope } }", "no enclosing loop is labelled `'nope`"),
+        ("fn main() { 'a: loop { 'a: loop { break } } }", "already used by an enclosing loop"),
+        ("fn main() { let x: u8 = 3; match x { 0..=100 => 1, 200..=255 => 2 } }", "missing: 101..=199"),
+        ("fn main() { let x: u8 = 3; match x { 300 => 1, _ => 0 } }", "`300` does not fit in u8"),
+        ("fn main() { let c = 'a' + 'b' }", "not defined for char"),
+        ("fn main() { let x = 5 as char }", "cannot cast i64 to char"),
+        ("fn main() { let x = 5xyz }", "invalid suffix `xyz`"),
+        ("fn main() { let x = 300 as u8 }", "does not fit in u8"),
     ];
     for (src, want) in cases {
         let got = compile_error(src);

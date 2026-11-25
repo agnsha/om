@@ -157,6 +157,7 @@ pub enum Stmt {
     While {
         cond: Expr,
         body: Block,
+        label: Option<String>,
         span: Span,
     },
     /// `for var in start..end` (or `..=` when `inclusive`).
@@ -166,6 +167,7 @@ pub enum Stmt {
         end: Expr,
         inclusive: bool,
         body: Block,
+        label: Option<String>,
         span: Span,
     },
     Return {
@@ -173,10 +175,12 @@ pub enum Stmt {
         span: Span,
     },
     Break {
+        label: Option<String>,
         value: Option<Expr>,
         span: Span,
     },
     Continue {
+        label: Option<String>,
         span: Span,
     },
     /// `defer expr`: run `expr` when the enclosing block exits, in reverse order.
@@ -202,6 +206,11 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 impl BinOp {
@@ -220,6 +229,11 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "&&",
             BinOp::Or => "||",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
         }
     }
 }
@@ -238,9 +252,11 @@ pub struct Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
-    Int(i64),
+    /// An integer literal. Its type comes from context, like in Rust (`i64` if nothing decides it).
+    Int(i128),
     Float(f64),
     Bool(bool),
+    Char(char),
     Str(String),
     /// A name, or a path such as `Color::Red`.
     Var(String),
@@ -266,7 +282,8 @@ pub enum ExprKind {
     Interp(Vec<InterpPart>),
     If(Box<Expr>, Block, Option<Block>),
     Match(Box<Expr>, Vec<Arm>),
-    Loop(Block),
+    /// `loop { }`, with an optional label.
+    Loop(Block, Option<String>),
     Block(Block),
 }
 
@@ -306,10 +323,13 @@ pub enum PatKind {
     Bind(String, bool),
     /// `(a, b)`
     Tuple(Vec<Pattern>),
-    Int(i64),
+    Int(i128),
     Bool(bool),
+    Char(char),
     /// `1..=5` or `0..10`
-    Range(i64, i64, bool),
+    Range(i128, i128, bool),
+    /// `'a'..='z'`
+    CharRange(char, char, bool),
     /// `Shape::Circle(r)` or `Color::Red`
     Variant(String, Vec<Pattern>),
     /// `A | B`

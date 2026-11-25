@@ -1,0 +1,99 @@
+fn sum_bytes(a: u8, b: u8) -> u8 { a + b }
+
+fn main() {
+    let x: u8 = 250
+    print(sum_bytes(x, 10))
+    let big: u64 = 18446744073709551615
+    print(big)
+    print(big / 2)
+    let small: i8 = -128
+    print(small)
+    print(-5i32 / 2)
+    print(7u32 / 2)
+    print(0xff & 0x0f | 0x30)
+    print(1 << 10)
+    print(-16 >> 2)
+    print(0xF0u8 >> 4)
+    print(!0u8)
+    print(5 ^ 3)
+    let w = 300
+    print(w as u8)
+    print(-1i32 as u32)
+    print(200u8 as i8)
+    print(-1i8 as i64)
+    print(3.99 as u8)
+    print(-5.0 as u8)
+    print(1e10 as i32)
+    print(i64::MAX)
+    print(u8::MAX as u32 + 1)
+    print(i16::MIN)
+    let f: f32 = 0.1
+    print(f)
+    print(f as f64)
+    print(2.0f32.sqrt())
+    print(2.0.powf(10.0))
+    print((-7.5).abs())
+    print(2.5.round())
+    print((-2.5).round())
+    print(3.7.floor())
+    print(0.0.sin())
+    print(f64::EPSILON > 0.0)
+    print(2.pow(10))
+    print(3u8.pow(5))
+    print(255u8.checked_add(1))
+    print(250u8.saturating_add(10))
+    print(i32::MIN.checked_div(-1))
+    print((-7).rem_euclid(3))
+    print(12u32.count_ones())
+    print(1u64.leading_zeros())
+    print(8i32.trailing_zeros())
+    print(64.is_power_of_two())
+    print((-9).abs())
+    let c = 'é'
+    print(c)
+    print('a' as u32)
+    print(97u8 as char)
+    print('7'.to_digit(10))
+    print('z'.is_ascii_alphabetic())
+    print('q'.to_ascii_uppercase())
+    print(char::from_digit(11, 16))
+    print(char::from_u32(0x1F600))
+    print(('x', 'y'))
+    print(c.len_utf8())
+    let mut n: u16 = 1
+    n <<= 3
+    n |= 1
+    print(n)
+    let kind = match x {
+        0..=9 => "small",
+        10..=199 => "medium",
+        200..=255 => "large",
+    }
+    print(kind)
+    let letter = match c {
+        'a'..='z' => 1,
+        'A'..='Z' => 2,
+        _ => 3,
+    }
+    print(letter)
+    let mut total = 0
+    'outer: for i in 0..10 {
+        for j in 0..10 {
+            if j > i { continue 'outer }
+            if i == 5 { break 'outer }
+            total += j
+        }
+    }
+    print(total)
+    let found = 'search: loop {
+        let mut k = 0
+        while true {
+            k += 1
+            if k == 7 { break 'search k * 2 }
+        }
+    }
+    print(found)
+    let mut steps = 0
+    for b in 250u8..=u8::MAX { steps += 1 }
+    print(steps)
+}

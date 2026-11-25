@@ -13,15 +13,19 @@ works, ⬜ planned.
 | `let`, `let mut`, type annotations, shadowing | ✅ | |
 | Block expressions, `if`/`else` as expressions | ✅ | |
 | `while`, `loop`, `for` | 🟡 | `for` runs over integer ranges (`0..n`, `0..=n`); iterators come with traits |
-| `break`, `continue`, `break value` from `loop` | ✅ | Loop labels (`'outer:`) ⬜ |
+| `break`, `continue`, `break value` from `loop`, loop labels | ✅ | |
 | Compound assignment `+= -= *= /= %=` | ✅ | |
-| Integer type `i64` | ✅ | |
-| Other integer types (`i8`…`i128`, `u8`…`u128`, `usize`) | ⬜ | Next batch |
-| Floats | 🟡 | `f64` ✅, `f32` ⬜ |
-| `bool`, `char` | 🟡 | `bool` ✅, `char` ⬜ |
-| `as` casts | 🟡 | i64 ↔ f64, bool → i64, C-like enum → i64 |
+| Integer types `i8`…`i64`, `u8`…`u64`, `isize`, `usize` | ✅ | `i128`/`u128` ⬜ |
+| Literal suffixes, hex/octal/binary literals, exponents | ✅ | |
+| Literal type inference | 🟡 | From the surrounding expression; Rust also infers from later uses |
+| Bitwise operators `& \| ^ << >> !` and their `=` forms | ✅ | |
+| Floats `f32`, `f64`, including `%` | ✅ | |
+| `bool`, `char` (Unicode, with escapes) | ✅ | |
+| `as` casts | ✅ | Same rules as Rust: integer widening and truncation, saturating float→int, `u8 as char`, `char as u32` |
 | Overflow checks in debug builds | ⬜ | Arithmetic currently wraps |
 | `const` items | ✅ | Literal values only; const expressions ⬜ |
+| Associated constants on built-in types (`u8::MAX`, `f64::EPSILON`) | ✅ | User-defined associated consts ⬜ |
+| Standard number and char methods | 🟡 | The common ones (see the language reference); more over time |
 | `static` items | ⬜ | |
 | Comments `//` and `/* */` | ✅ | Doc comments `///` ⬜ |
 
@@ -36,7 +40,7 @@ works, ⬜ planned.
 | `impl` blocks, methods, associated functions, `Self` | ✅ | |
 | `self`, `&self`, `&mut self`, `mut self` | ✅ | |
 | Tuples `(a, b)`, `.0` indexing, nested tuples | ✅ | |
-| Arrays `[T; N]` and slices | ⬜ | Next batch |
+| Arrays `[T; N]` and slices | ⬜ | Arrive with the memory model, together with `Vec` |
 | `String`, `Vec<T>`, `HashMap<K, V>`, `Box<T>` | ⬜ | Need the heap and the ownership checker |
 | Recursive types | ⬜ | Need `Box`; rejected with a clear error today |
 | Type aliases `type X = Y` | ⬜ | |
@@ -46,11 +50,11 @@ works, ⬜ planned.
 | Feature | Status | Notes |
 |---|---|---|
 | `match` on integers, bools and enums | ✅ | |
-| Literal, range (`1..=9`, `0..10`), wildcard and binding patterns | ✅ | |
+| Literal, range (`1..=9`, `0..10`, `'a'..='z'`), wildcard and binding patterns | ✅ | |
 | Nested variant patterns | ✅ | |
 | Or-patterns `A \| B` | 🟡 | Without bindings |
 | Match guards `if cond` | ✅ | |
-| Exhaustiveness checking with a missing-case example | ✅ | Same matrix algorithm family as rustc |
+| Exhaustiveness checking with a missing-case example | ✅ | Same matrix algorithm family as rustc, including integer and char ranges (`0..=127` plus `128..=255` covers `u8`) |
 | `if let`, `while let` | ✅ | `let else` ⬜ |
 | Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
 | Tuple patterns in `match` | ✅ | |

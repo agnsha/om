@@ -60,7 +60,7 @@ type PResult<T> = Result<T, ParseError>;
 /// Lex and parse a whole Om source file.
 pub fn parse(src: &str) -> PResult<Program> {
     let tokens = lex(src)?;
-    let mut p = Parser { tokens, pos: 0, no_struct: false };
+    let mut p = Parser { tokens, pos: 0, no_struct: false, label: None };
     let mut prog = Program::default();
     while !p.at(&T::Eof) {
         match p.peek().kind {
@@ -81,6 +81,8 @@ struct Parser {
     pos: usize,
     /// True while parsing an `if`/`while`/`for`/`match` header, where `Name {` starts the body.
     no_struct: bool,
+    /// A `'label:` waiting for the loop that follows it.
+    label: Option<String>,
 }
 
 fn is_upper(name: &str) -> bool {
@@ -464,12 +466,13 @@ impl Parser {
                 // `while let P = e { body }` is `loop { match e { P => body, _ => break } }`.
                 self.bump();
                 self.bump();
+                let label = self.label.take();
                 let pat = self.pattern()?;
                 self.expect(T::Eq)?;
                 let scrut = self.header_expr()?;
                 let body = self.block()?;
                 let span = start.to(body.span);
-                let brk = Block { stmts: vec![Stmt::Break { value: None, span }], tail: None, span };
+                let brk = Block { stmts: vec![Stmt::Break { label: None, value: None, span }], tail: None, span };
                 let arms = vec![
                     Arm {
                         span: pat.span,
@@ -486,16 +489,27 @@ impl Parser {
                 ];
                 let m = Expr { kind: ExprKind::Match(Box::new(scrut), arms), span };
                 let lp = Block { stmts: vec![Stmt::Expr(m)], tail: None, span };
-                Ok(Stmt::Expr(Expr { kind: ExprKind::Loop(lp), span }))
+                Ok(Stmt::Expr(Expr { kind: ExprKind::Loop(lp, label), span }))
             }
             T::While => {
                 self.bump();
+                let label = self.label.take();
                 let cond = self.header_expr()?;
                 let body = self.block()?;
-                Ok(Stmt::While { cond, span: start.to(body.span), body })
+                Ok(Stmt::While { cond, label, span: start.to(body.span), body })
+            }
+            T::Label(_) if self.peek_at(1) == &T::Colon => {
+                let T::Label(name) = self.bump().kind else { unreachable!() };
+                self.bump();
+                if !matches!(self.peek().kind, T::While | T::For | T::Loop) {
+                    return self.error("`loop`, `while` or `for` after a label");
+                }
+                self.label = Some(name);
+                self.stmt()
             }
             T::For => {
                 self.bump();
+                let label = self.label.take();
                 let (var, _) = self.ident()?;
                 self.expect(T::In)?;
                 let range_start = self.header_expr()?;
@@ -508,17 +522,31 @@ impl Parser {
                 };
                 let end = self.header_expr()?;
                 let body = self.block()?;
-                Ok(Stmt::For { var, start: range_start, end, inclusive, span: start.to(body.span), body })
+                Ok(Stmt::For { var, start: range_start, end, inclusive, label, span: start.to(body.span), body })
             }
             T::Return | T::Break => {
                 let is_return = self.bump().kind == T::Return;
+                let label = match self.peek().kind.clone() {
+                    T::Label(l) if !is_return => {
+                        self.bump();
+                        Some(l)
+                    }
+                    _ => None,
+                };
                 let value = if self.at_expr_end() { None } else { Some(self.expr()?) };
                 let span = start.to(self.prev_span());
-                Ok(if is_return { Stmt::Return { value, span } } else { Stmt::Break { value, span } })
+                Ok(if is_return { Stmt::Return { value, span } } else { Stmt::Break { label, value, span } })
             }
             T::Continue => {
                 self.bump();
-                Ok(Stmt::Continue { span: start })
+                let label = match self.peek().kind.clone() {
+                    T::Label(l) => {
+                        self.bump();
+                        Some(l)
+                    }
+                    _ => None,
+                };
+                Ok(Stmt::Continue { label, span: start.to(self.prev_span()) })
             }
             T::Defer => {
                 self.bump();
@@ -536,6 +564,11 @@ impl Parser {
                     T::StarEq => Some(BinOp::Mul),
                     T::SlashEq => Some(BinOp::Div),
                     T::PercentEq => Some(BinOp::Rem),
+                    T::AmpEq => Some(BinOp::BitAnd),
+                    T::PipeEq => Some(BinOp::BitOr),
+                    T::CaretEq => Some(BinOp::BitXor),
+                    T::ShlEq => Some(BinOp::Shl),
+                    T::ShrEq => Some(BinOp::Shr),
                     _ => return Ok(Stmt::Expr(target)),
                 };
                 self.bump();
@@ -573,11 +606,17 @@ impl Parser {
                 T::LtEq => (BinOp::Le, 3),
                 T::Gt => (BinOp::Gt, 3),
                 T::GtEq => (BinOp::Ge, 3),
-                T::Plus => (BinOp::Add, 4),
-                T::Minus => (BinOp::Sub, 4),
-                T::Star => (BinOp::Mul, 5),
-                T::Slash => (BinOp::Div, 5),
-                T::Percent => (BinOp::Rem, 5),
+                // Same order as Rust: `|` < `^` < `&` < shifts < `+ -` < `* / %`.
+                T::Pipe => (BinOp::BitOr, 4),
+                T::Caret => (BinOp::BitXor, 5),
+                T::Amp => (BinOp::BitAnd, 6),
+                T::Shl => (BinOp::Shl, 7),
+                T::Shr => (BinOp::Shr, 7),
+                T::Plus => (BinOp::Add, 8),
+                T::Minus => (BinOp::Sub, 8),
+                T::Star => (BinOp::Mul, 9),
+                T::Slash => (BinOp::Div, 9),
+                T::Percent => (BinOp::Rem, 9),
                 _ => return Ok(lhs),
             };
             if prec < min_prec {
@@ -590,29 +629,33 @@ impl Parser {
         }
     }
 
+    /// A prefix expression followed by any `as` casts. As in Rust, prefix operators
+    /// bind tighter than `as`: `-1 as u32` is `(-1) as u32`.
     fn unary(&mut self) -> PResult<Expr> {
+        let mut e = self.prefix()?;
+        while self.eat(&T::As) {
+            let ty = self.ty()?;
+            let span = e.span.to(ty.span);
+            e = Expr { kind: ExprKind::Cast(Box::new(e), ty), span };
+        }
+        Ok(e)
+    }
+
+    fn prefix(&mut self) -> PResult<Expr> {
         let start = self.peek().span;
         let kind = match self.peek().kind {
             T::Minus | T::Bang => {
                 let op = if self.bump().kind == T::Minus { UnOp::Neg } else { UnOp::Not };
-                let inner = self.unary()?;
+                let inner = self.prefix()?;
                 ExprKind::Unary(op, Box::new(inner))
             }
             T::Amp => {
                 self.bump();
                 let mutable = self.eat(&T::Mut);
-                let inner = self.unary()?;
+                let inner = self.prefix()?;
                 ExprKind::Ref(mutable, Box::new(inner))
             }
-            _ => {
-                let mut e = self.postfix()?;
-                while self.eat(&T::As) {
-                    let ty = self.ty()?;
-                    let span = e.span.to(ty.span);
-                    e = Expr { kind: ExprKind::Cast(Box::new(e), ty), span };
-                }
-                return Ok(e);
-            }
+            _ => return self.postfix(),
         };
         Ok(Expr { kind, span: start.to(self.prev_span()) })
     }
@@ -631,19 +674,19 @@ impl Parser {
             }
             // Tuple fields: `t.0`. The lexer reads `t.0.1` as `t`, `.`, `0.1`.
             match self.peek().kind.clone() {
-                T::Int(n) => {
+                T::Int(n, None) => {
                     let span = e.span.to(self.bump().span);
                     e = Expr { kind: ExprKind::Field(Box::new(e), n.to_string()), span };
                     continue;
                 }
-                T::Float(_) => {
+                T::Float(_, None) => {
                     let tok = self.bump();
                     let span = e.span.to(tok.span);
                     // Recover both indexes from the token's text length is not possible; use the value.
                     let text = format!(
                         "{}",
                         match tok.kind {
-                            T::Float(x) => x,
+                            T::Float(x, _) => x,
                             _ => unreachable!(),
                         }
                     );
@@ -711,13 +754,17 @@ impl Parser {
         let tok = self.peek().clone();
         let span = tok.span;
         let kind = match tok.kind {
-            T::Int(n) => {
+            T::Int(n, suffix) => {
                 self.bump();
-                ExprKind::Int(n)
+                return Ok(with_suffix(ExprKind::Int(n as i128), suffix, span));
             }
-            T::Float(x) => {
+            T::Float(x, suffix) => {
                 self.bump();
-                ExprKind::Float(x)
+                return Ok(with_suffix(ExprKind::Float(x), suffix, span));
+            }
+            T::Char(c) => {
+                self.bump();
+                ExprKind::Char(c)
             }
             T::Str(s) => {
                 self.bump();
@@ -769,8 +816,17 @@ impl Parser {
             T::Match => return self.match_expr(),
             T::Loop => {
                 self.bump();
+                let label = self.label.take();
                 let body = self.block()?;
-                return Ok(Expr { span: span.to(body.span), kind: ExprKind::Loop(body) });
+                return Ok(Expr { span: span.to(body.span), kind: ExprKind::Loop(body, label) });
+            }
+            T::Label(_) if self.peek_at(1) == &T::Colon && self.peek_at(2) == &T::Loop => {
+                let T::Label(name) = self.bump().kind else { unreachable!() };
+                self.bump();
+                self.label = Some(name);
+                let mut e = self.primary()?;
+                e.span = span.to(e.span);
+                return Ok(e);
             }
             T::LBrace => {
                 let b = self.block()?;
@@ -894,21 +950,41 @@ impl Parser {
         Ok(Pattern { kind: PatKind::Or(alts), span })
     }
 
-    fn int_lit(&mut self) -> PResult<i64> {
+    fn int_lit(&mut self) -> PResult<i128> {
         let neg = self.eat(&T::Minus);
         match self.peek().kind {
-            T::Int(n) => {
+            T::Int(n, _) => {
                 self.bump();
-                Ok(if neg { -n } else { n })
+                Ok(if neg { -(n as i128) } else { n as i128 })
             }
             _ => self.error("an integer"),
+        }
+    }
+
+    fn char_lit(&mut self) -> PResult<char> {
+        match self.peek().kind {
+            T::Char(c) => {
+                self.bump();
+                Ok(c)
+            }
+            _ => self.error("a character"),
         }
     }
 
     fn pattern_alt(&mut self) -> PResult<Pattern> {
         let start = self.peek().span;
         let kind = match self.peek().kind.clone() {
-            T::Int(_) | T::Minus => {
+            T::Char(_) => {
+                let lo = self.char_lit()?;
+                if self.eat(&T::DotDotEq) {
+                    PatKind::CharRange(lo, self.char_lit()?, true)
+                } else if self.eat(&T::DotDot) {
+                    PatKind::CharRange(lo, self.char_lit()?, false)
+                } else {
+                    PatKind::Char(lo)
+                }
+            }
+            T::Int(..) | T::Minus => {
                 let lo = self.int_lit()?;
                 if self.eat(&T::DotDotEq) {
                     PatKind::Range(lo, self.int_lit()?, true)
@@ -964,6 +1040,18 @@ impl Parser {
     }
 }
 
+/// `5u8` becomes `5 as u8`; the type checker treats a cast literal as a literal of that type.
+fn with_suffix(kind: ExprKind, suffix: Option<String>, span: Span) -> Expr {
+    let e = Expr { kind, span };
+    match suffix {
+        None => e,
+        Some(name) => {
+            let ty = TypeExpr { name, args: vec![], span };
+            Expr { kind: ExprKind::Cast(Box::new(e), ty), span }
+        }
+    }
+}
+
 /// Desugar `lhs |> f(a, b)` into `f(lhs, a, b)`, and `lhs |> f` into `f(lhs)`.
 fn pipe(lhs: Expr, rhs: Expr) -> PResult<Expr> {
     let span = lhs.span.to(rhs.span);
@@ -994,7 +1082,7 @@ fn interp_part(part: StrPart) -> PResult<InterpPart> {
             for t in &mut tokens {
                 t.span = Span::new(t.span.start + offset, t.span.end + offset);
             }
-            let mut p = Parser { tokens, pos: 0, no_struct: false };
+            let mut p = Parser { tokens, pos: 0, no_struct: false, label: None };
             let e = p.expr()?;
             if !p.at(&T::Eof) {
                 return p.error("`}` to end the interpolation");
@@ -1136,7 +1224,7 @@ mod tests {
         }";
         let body = parse(src).unwrap().functions[0].body.clone();
         assert!(matches!(body.stmts[1], Stmt::For { inclusive: false, .. }));
-        assert!(matches!(&body.stmts[2], Stmt::Let { value, .. } if matches!(value.kind, ExprKind::Loop(_))));
+        assert!(matches!(&body.stmts[2], Stmt::Let { value, .. } if matches!(value.kind, ExprKind::Loop(..))));
         assert!(matches!(body.stmts[3], Stmt::Assign { op: Some(BinOp::Sub), .. }));
     }
 
@@ -1164,7 +1252,7 @@ mod tests {
         assert!(matches!(&f.body.stmts[1], Stmt::Let { value, .. }
             if matches!(&value.kind, ExprKind::Field(inner, n) if n == "0" && matches!(inner.kind, ExprKind::Try(_)))));
         assert!(matches!(&f.body.stmts[2], Stmt::Expr(e) if matches!(e.kind, ExprKind::Match(..))));
-        assert!(matches!(&f.body.stmts[3], Stmt::Expr(e) if matches!(e.kind, ExprKind::Loop(_))));
+        assert!(matches!(&f.body.stmts[3], Stmt::Expr(e) if matches!(e.kind, ExprKind::Loop(..))));
         assert!(
             matches!(&f.body.tail.as_ref().unwrap().kind, ExprKind::Call(n, a) if n == "Ok" && matches!(a[0].value.kind, ExprKind::Tuple(ref t) if t.is_empty()))
         );
@@ -1175,5 +1263,38 @@ mod tests {
         let err = parse("fn main( { }").unwrap_err();
         assert_eq!(err.message, "expected a name, found `{`");
         assert_eq!(err.span.start, 9);
+    }
+}
+
+#[cfg(test)]
+mod batch3_tests {
+    use super::*;
+
+    #[test]
+    fn bit_operator_precedence_matches_rust() {
+        let p = parse("fn f() -> i64 { 1 | 2 ^ 3 & 4 << 5 + 6 }").unwrap();
+        // `1 | (2 ^ (3 & (4 << (5 + 6))))`
+        let tail = p.functions[0].body.tail.as_ref().unwrap();
+        let ExprKind::Binary(BinOp::BitOr, _, r) = &tail.kind else { panic!("{tail:?}") };
+        let ExprKind::Binary(BinOp::BitXor, _, r) = &r.kind else { panic!() };
+        let ExprKind::Binary(BinOp::BitAnd, _, r) = &r.kind else { panic!() };
+        let ExprKind::Binary(BinOp::Shl, _, r) = &r.kind else { panic!() };
+        assert!(matches!(r.kind, ExprKind::Binary(BinOp::Add, ..)));
+    }
+
+    #[test]
+    fn labels_chars_and_suffixes() {
+        let src = "fn main() { 'outer: for i in 0..3 { 'inner: while true { break 'outer } continue 'outer } let c = 'x' let n = 7u8 match c { 'a'..='z' => 1, _ => 0 } }";
+        let p = parse(src).unwrap();
+        let body = &p.functions[0].body;
+        let Stmt::For { label, body: fb, .. } = &body.stmts[0] else { panic!() };
+        assert_eq!(label.as_deref(), Some("outer"));
+        let Stmt::While { label, body: wb, .. } = &fb.stmts[0] else { panic!() };
+        assert_eq!(label.as_deref(), Some("inner"));
+        assert!(matches!(&wb.stmts[0], Stmt::Break { label: Some(l), .. } if l == "outer"));
+        assert!(matches!(&fb.stmts[1], Stmt::Continue { label: Some(l), .. } if l == "outer"));
+        assert!(matches!(&body.stmts[1], Stmt::Let { value, .. } if value.kind == ExprKind::Char('x')));
+        assert!(matches!(&body.stmts[2], Stmt::Let { value, .. } if matches!(value.kind, ExprKind::Cast(..))));
+        assert!(parse("fn main() { 'a: let x = 1 }").is_err());
     }
 }
