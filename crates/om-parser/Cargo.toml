@@ -1,0 +1,8 @@
+[package]
+name = "om-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+om-lexer = { version = "0.1.0", path = "../om-lexer" }

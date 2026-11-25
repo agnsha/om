@@ -1,0 +1,7 @@
+/target
+*.o
+# binaries produced by `om build examples/x.om`
+/hello
+/fib
+/fizzbuzz
+/primes

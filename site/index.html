@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Om programming language</title>
+<meta name="description" content="Om is a compiled systems language aiming for Rust-level speed, faster builds and no lifetime annotations. Built for backend services.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23e4002b'/><circle cx='16' cy='16' r='8' fill='none' stroke='white' stroke-width='4'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#fff,#0e0e0e);--ink:light-dark(#111,#f2f2f2);--red:#e4002b;--grey:light-dark(#666,#a3a3a3);--rule:light-dark(#dedede,#2a2a2a);--soft:light-dark(#f4f4f4,#171717)}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 Archivo,system-ui,sans-serif;overflow-x:clip}
+a{color:inherit}
+.band{padding:clamp(36px,6vw,88px) max(5vw,16px)}
+.wrap{max-width:1180px;margin:0 auto}
+h1,h2,h3{font-stretch:112%;font-weight:800;letter-spacing:-.02em;line-height:1.06;margin:0;text-wrap:balance}
+h2{font-size:clamp(28px,3.4vw,40px);margin-bottom:20px;max-width:24ch}
+h3{font-size:19px;margin-bottom:6px}
+p{margin:0 0 14px;max-width:64ch}
+code,pre{font-family:"JetBrains Mono",ui-monospace,monospace}
+code{font-size:.9em;overflow-wrap:anywhere}
+header.nav{display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:16px max(5vw,16px);border-top:10px solid var(--ink);border-bottom:1px solid var(--rule)}
+.logo{display:flex;align-items:center;gap:10px;font-stretch:125%;font-weight:800;font-size:22px;text-decoration:none}
+.logo i{width:26px;height:26px;border-radius:50%;border:6px solid var(--red);display:block}
+header.nav nav{display:flex;gap:20px;flex-wrap:wrap;margin-left:auto;font-weight:600;font-size:15px}
+header.nav nav a{text-decoration:none;padding:6px 0}
+header.nav nav a:hover,header.nav nav a:focus-visible{color:var(--red)}
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:clamp(24px,5vw,72px);align-items:center}
+.hero h1{font-size:clamp(40px,6vw,68px)}
+.hero h1 span{display:block;color:var(--grey);font-weight:600;font-size:.52em;letter-spacing:-.01em;margin-top:14px;line-height:1.25}
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}
+.btn{display:inline-flex;align-items:center;min-height:48px;padding:0 22px;font-weight:700;text-decoration:none;border:2px solid var(--ink)}
+.btn.p{background:var(--red);border-color:var(--red);color:#fff}
+.btn:hover{transform:translateY(-1px)}
+.btn:focus-visible{outline:3px solid var(--red);outline-offset:3px}
+.status{margin-top:20px;font-size:15px;color:var(--grey)}
+.term{background:#111;color:#eaeaea;border-top:8px solid var(--red);box-shadow:0 1px 0 var(--rule)}
+.term .bar{display:flex;gap:16px;padding:10px 16px;font:600 13px Archivo,sans-serif;color:#9a9a9a;border-bottom:1px solid #2a2a2a}
+.term .bar b{color:#fff}
+.term pre{margin:0;padding:18px;overflow-x:auto;font-size:14.5px;line-height:1.6}
+.k{color:#ff6b84;font-weight:600}.f{color:#7cc7ff}.s{color:#b8e986}.c{color:#8a8a8a}.n{color:#ffd479}
+.out{border-top:1px solid #2a2a2a;color:#cfcfcf}
+.out .pr{color:#ff6b84}
+.feat{display:grid;grid-template-columns:repeat(auto-fit,minmax(15em,1fr));border-top:3px solid var(--ink)}
+.feat div{padding:22px 24px 22px 0;border-bottom:1px solid var(--rule)}
+.feat .big{font-stretch:125%;font-weight:800;font-size:clamp(30px,3.4vw,40px);line-height:1;margin-bottom:10px}
+.feat .big.r{color:var(--red)}
+.feat p{font-size:15.5px;color:var(--grey);margin:0}
+.note{font-size:15px;color:var(--grey)}
+.alt{background:var(--soft)}
+.route{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin-top:30px}
+.stn{position:relative;padding:36px 12px 0 0}
+.stn::before{content:"";position:absolute;top:8px;left:0;right:0;height:8px;background:var(--red)}
+.stn::after{content:"";position:absolute;top:2px;left:0;width:20px;height:20px;border-radius:50%;background:var(--bg);border:5px solid var(--red)}
+.alt .stn::after{background:var(--soft)}
+.stn:last-child::before{right:auto;width:20px;background:var(--ink)}
+.stn:last-child::after{border-color:var(--ink)}
+.stn b{display:block;font-stretch:112%}
+.stn span{display:block;font-size:14px;color:var(--grey);line-height:1.4}
+@media(max-width:820px){.route{grid-template-columns:minmax(0,1fr)}.stn{padding:0 0 18px 40px}.stn::before{top:0;bottom:0;left:6px;right:auto;width:8px;height:auto}.stn:last-child::before{display:none}}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(24px,5vw,64px);align-items:start}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:15.5px}
+th{text-align:left;font-stretch:112%;border-bottom:3px solid var(--ink);padding:8px 12px 8px 0}
+td{border-bottom:1px solid var(--rule);padding:11px 12px 11px 0;vertical-align:top}
+td.w{font-weight:700}
+.win{color:var(--red)}.lose{color:var(--grey)}
+.tt{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:clamp(14px,3vw,36px);align-items:baseline}
+.tt>*{border-top:1px solid var(--rule);padding:16px 0}
+.tt .ph{font-stretch:125%;font-weight:800;font-size:clamp(30px,4vw,44px);line-height:1}
+.tt .ph.done{color:var(--red)}
+.tt .st{font-size:14px;font-weight:700;white-space:nowrap}
+.tt .st.done{color:var(--red)}
+.tt p{margin:4px 0 0;color:var(--grey);font-size:15.5px}
+.code{position:relative}
+.code pre{background:#111;color:#eaeaea;margin:0 0 14px;padding:16px 18px;overflow-x:auto;font-size:14.5px;border-left:6px solid var(--red)}
+.copy{position:absolute;top:8px;right:8px;background:#2a2a2a;color:#fff;border:0;font:600 13px Archivo,sans-serif;padding:8px 12px;min-height:34px;cursor:pointer}
+.copy:focus-visible{outline:2px solid var(--red)}
+footer{border-top:10px solid var(--ink)}
+footer .wrap{display:flex;gap:24px;flex-wrap:wrap;justify-content:space-between;align-items:center}
+footer nav{display:flex;gap:20px;flex-wrap:wrap;font-weight:600}
+@media(max-width:760px){.hero,.two{grid-template-columns:minmax(0,1fr)}header.nav nav{margin-left:0;width:100%}}
+@media(max-width:600px){table{font-size:13.5px}.tt{grid-template-columns:auto minmax(0,1fr)}.tt .st{grid-column:2;border-top:0;padding-top:0}}
+@media(prefers-reduced-motion:no-preference){.btn{transition:transform .15s}.stn::after{animation:pop .5s backwards}.stn:nth-child(2)::after{animation-delay:.1s}.stn:nth-child(3)::after{animation-delay:.2s}.stn:nth-child(4)::after{animation-delay:.3s}.stn:nth-child(5)::after{animation-delay:.4s}.stn:nth-child(6)::after{animation-delay:.5s}@keyframes pop{from{transform:scale(0)}}}
+</style>
+</head>
+<body>
+
+<header class="nav">
+<a class="logo" href="#"><i></i>Om</a>
+<nav aria-label="Main">
+<a href="#why">Why Om</a><a href="#compiler">How it works</a><a href="#vs">Om vs Rust</a><a href="#roadmap">Roadmap</a><a href="#install">Install</a><a href="https://github.com/agnsha/om">GitHub</a>
+</nav>
+</header>
+
+<section class="band"><div class="wrap hero">
+<div>
+<h1>Systems speed, simpler code.<span>A compiled language aiming for Rust-level performance, faster builds and no lifetime annotations. Built for backend services.</span></h1>
+<div class="cta"><a class="btn p" href="#install">Get started</a><a class="btn" href="https://github.com/agnsha/om/blob/main/docs/design.md">Read the design</a></div>
+<p class="status">Early and experimental: phase 0 of 6. The compiler builds real native executables today; ownership, structs and generics come next.</p>
+</div>
+<div class="term" aria-label="Example Om program and its output">
+<div class="bar"><b>fib.om</b><span>native, via Cranelift</span></div>
+<pre><span class="k">fn</span> <span class="f">fib</span>(n: i64) -&gt; i64 {
+    <span class="k">if</span> n &lt; <span class="n">2</span> { n } <span class="k">else</span> { <span class="f">fib</span>(n - <span class="n">1</span>) + <span class="f">fib</span>(n - <span class="n">2</span>) }
+}
+
+<span class="k">fn</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">"Hello, Om!"</span>)
+    <span class="k">let</span> <span class="k">mut</span> i = <span class="n">0</span>
+    <span class="k">while</span> i &lt; <span class="n">5</span> {
+        <span class="f">print</span>(<span class="f">fib</span>(i * <span class="n">5</span>))
+        i = i + <span class="n">1</span>
+    }
+}</pre>
+<pre class="out"><span class="pr">$</span> om run fib.om
+Hello, Om!
+0
+5
+55
+610
+6765</pre>
+</div>
+</div></section>
+
+<section class="band" id="why"><div class="wrap">
+<h2>What Om is aiming for</h2>
+<div class="feat">
+<div><div class="big">≈ Rust</div><h3>Runtime speed</h3><p>Static types, no garbage collector, generics compiled to specialised code. Release builds will use LLVM, the optimizer Rust uses.</p></div>
+<div><div class="big r">Faster builds</div><h3>Compile time</h3><p>Dev builds use Cranelift, a fast code generator, and a type checker with no lifetime solving.</p></div>
+<div><div class="big r">0 lifetimes</div><h3>Simpler ownership</h3><p>Borrow inside a function call, own everything else. Moves and safety as in Rust, without lifetime syntax.</p></div>
+<div><div class="big">1 reset</div><h3>Per-request memory</h3><p>Servers get a memory region per request: allocation is a pointer bump and the whole request is freed in one step.</p></div>
+</div>
+<p class="note" style="margin-top:14px">These are design goals. Benchmarks against Rust, C and Go arrive in phase 5 and will be published in full, including where Om is slower.</p>
+</div></section>
+
+<section class="band alt" id="compiler"><div class="wrap">
+<h2>From source to native binary in five stations</h2>
+<p>The compiler is written in Rust and split into small crates you can read in an afternoon.</p>
+<div class="route">
+<div class="stn"><b>Lexer</b><span>text to tokens, each with its source span</span></div>
+<div class="stn"><b>Parser</b><span>recursive descent to a syntax tree</span></div>
+<div class="stn"><b>Checker</b><span>types, names and clear errors with a caret</span></div>
+<div class="stn"><b>Cranelift</b><span>SSA IR to machine code for x86-64 or ARM64</span></div>
+<div class="stn"><b>Linker</b><span>object file plus a tiny runtime, linked by cc</span></div>
+<div class="stn"><b>Executable</b><span>a native program, no VM</span></div>
+</div>
+</div></section>
+
+<section class="band" id="vs"><div class="wrap">
+<h2>Om and Rust, honestly</h2>
+<div class="scroll"><table>
+<thead><tr><th>Area</th><th>Rust</th><th>Om plan</th><th>Edge</th></tr></thead>
+<tbody>
+<tr><td>Compute speed</td><td>LLVM, highly tuned</td><td>LLVM in release builds</td><td class="w">Tie at best</td></tr>
+<tr><td>Servers</td><td>malloc per object unless you opt in to arenas</td><td>Region per request by default</td><td class="w win">Om, if benchmarks agree</td></tr>
+<tr><td>Debug builds</td><td>Slow on large crates</td><td>Cranelift and a linear front end</td><td class="w win">Om</td></tr>
+<tr><td>Learning curve</td><td>Lifetimes, traits, macros</td><td>No lifetimes, simple interfaces</td><td class="w win">Om</td></tr>
+<tr><td>Expressiveness</td><td>References anywhere</td><td>References as parameters</td><td class="w lose">Rust</td></tr>
+<tr><td>Ecosystem</td><td>crates.io, a decade of libraries</td><td>Starting from zero, C interop</td><td class="w lose">Rust</td></tr>
+</tbody></table></div>
+</div></section>
+
+<section class="band alt" id="roadmap"><div class="wrap">
+<h2>Roadmap</h2>
+<div class="tt" id="tt"></div>
+</div></section>
+
+<section class="band" id="install"><div class="wrap two">
+<div>
+<h2>Install and run</h2>
+<p>You need Rust stable and a C compiler (<code>cc</code>, <code>gcc</code> or <code>clang</code>). Works on Linux and macOS, x86-64 and ARM64.</p>
+<p>Then read the <a href="https://github.com/agnsha/om/blob/main/docs/getting-started.md">getting started guide</a> and the <a href="https://github.com/agnsha/om/blob/main/docs/language.md">language reference</a>.</p>
+</div>
+<div>
+<div class="code"><button class="copy" type="button" data-for="inst">Copy</button>
+<pre id="inst">git clone https://github.com/agnsha/om
+cd om
+cargo install --path crates/omc
+om run examples/hello.om</pre></div>
+<div class="code"><button class="copy" type="button" data-for="cmds">Copy</button>
+<pre id="cmds">om run   app.om            # compile and run
+om build app.om -o app     # native executable
+om check app.om            # type-check only</pre></div>
+</div>
+</div></section>
+
+<section class="band alt"><div class="wrap two">
+<div>
+<h2>Help build a language</h2>
+<p>Om is open source under MIT or Apache 2.0. Small contributions matter: a clearer error message, a new example program, a test for an edge case.</p>
+</div>
+<div class="cta" style="margin-top:0">
+<a class="btn p" href="https://github.com/agnsha/om/blob/main/CONTRIBUTING.md">Contributing guide</a>
+<a class="btn" href="https://github.com/agnsha/om/issues">Open issues</a>
+</div>
+</div></section>
+
+<footer class="band"><div class="wrap">
+<a class="logo" href="#"><i></i>Om</a>
+<nav aria-label="Footer"><a href="https://github.com/agnsha/om">GitHub</a><a href="https://github.com/agnsha/om/tree/main/docs">Docs</a><a href="https://github.com/agnsha/om/blob/main/docs/design.md">Design</a><a href="https://github.com/agnsha/om/blob/main/LICENSE-MIT">License</a></nav>
+</div></footer>
+
+<script>
+{
+const phases=[
+ ["0","Lexer, parser, Cranelift native backend, CLI, tests, CI","done"],
+ ["1","Core language: more integer types, for loops, a separate checker","next"],
+ ["2","Structs, moves, scoped borrows and the ownership checker","planned"],
+ ["3","Enums, pattern matching, generics, interfaces, Result and ?","planned"],
+ ["4","Standard library, regions, C interop, om test and om fmt","planned"],
+ ["5","LLVM release backend and public benchmarks vs Rust, C, Go","planned"],
+ ["6","HTTP server library with per-request regions","planned"]
+];
+document.getElementById('tt').innerHTML=phases.map(([n,t,s])=>`<div class="ph${s==='done'?' done':''}">${n}</div><div><b>${t}</b></div><div class="st${s==='done'?' done':''}">${s==='done'?'Done':s==='next'?'Next':'Planned'}</div>`).join('');
+for(const b of document.querySelectorAll('.copy')){b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(document.getElementById(b.dataset.for).textContent);b.textContent='Copied'}catch(e){b.textContent='Select to copy'}setTimeout(()=>b.textContent='Copy',1500)})}
+}
+</script>
+</body>
+</html>
