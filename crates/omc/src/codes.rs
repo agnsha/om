@@ -571,8 +571,9 @@ pub const CODES: &[Code] = &[
             "cannot move `$` while $ borrows it",
             "cannot change `$` while $ borrows it",
             "cannot pass `$` as `&mut` while also passing a view of its text",
+            "cannot change `$`: it is borrowed with `&`, so it is read-only$",
         ],
-        explain: "While a `str` view or `&` reference points into a value, the value cannot be moved or changed. Finish using the view first, or copy what you need with `.to_string()` or `.clone()`.",
+        explain: "While a `str` view or `&` reference points into a value, the value cannot be moved or changed, and data reached through a `&` borrow is read-only (take `&mut` to change it). Finish using the view first, or copy what you need with `.to_string()` or `.clone()`.",
     },
     Code {
         code: "E1003",

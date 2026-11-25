@@ -1,15 +1,47 @@
-<h1 align="center">Om</h1>
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/om-logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/om-logo-light.svg">
+    <img alt="The Om programming language" src="assets/om-logo-light.svg" width="50%">
+  </picture>
 
-<p align="center">
-  <b>A systems language aiming for Rust-level speed, faster builds, and no lifetime annotations.</b><br>
-  Compiled to native code. No garbage collector. Built for backend services.
-</p>
+<p><b>A systems language aiming for Rust-level speed, faster builds, and no lifetime annotations.</b></p>
 
-<p align="center">
-  <a href="https://github.com/agnsha/om/actions/workflows/ci.yml"><img src="https://github.com/agnsha/om/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License"></a>
-  <img src="https://img.shields.io/badge/status-phase%203%20(early)-orange" alt="Status">
-</p>
+[Getting started](docs/getting-started.md) | [Language reference](docs/language.md) | [Examples](examples) | [Design](docs/design.md) | [Roadmap](#roadmap) | [Contributing](CONTRIBUTING.md)
+
+[![CI](https://github.com/agnsha/om/actions/workflows/ci.yml/badge.svg)](https://github.com/agnsha/om/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)](#license)
+![Status](https://img.shields.io/badge/status-phase%203%20(early)-orange)
+
+</div>
+
+This is the main source code repository for Om. It contains the compiler, the
+`om` command line tool, examples, and documentation.
+
+## Why Om?
+
+- **Performance:** Om compiles to native code with no garbage collector and no
+  runtime. Generics are monomorphized, and the design rules out hidden copies,
+  hidden allocation and exceptions.
+- **Simplicity:** Ownership with automatic drop, and references that never need
+  lifetime annotations. You get Rust's traits, enums, `match`, `Option`/`Result`
+  and `?` with less to write.
+- **Productivity:** Default and named arguments, the `|>` pipeline, string
+  interpolation and `defer` work today, and errors point at the exact line.
+
+## Quick start
+
+```sh
+git clone https://github.com/agnsha/om
+cd om
+cargo install --path crates/omc   # installs the `om` command
+om run examples/hello.om
+```
+
+You need [Rust](https://rustup.rs) (stable) and a C compiler for linking. See
+[Install](#install) and the [getting started guide](docs/getting-started.md) for details.
+
+## A taste of Om
 
 ```om
 fn fib(n: i64) -> i64 {
@@ -23,8 +55,9 @@ fn main() {
 ```
 
 ```console
-$ om run examples/hello.om
+$ om run hello.om
 Hello, Om!
+6765
 ```
 
 > **Status: early and experimental.** The compiler produces real native
@@ -34,7 +67,7 @@ Hello, Om!
 > library are still ahead. See the [roadmap](#roadmap) and the
 > [Rust parity checklist](docs/rust-parity.md).
 
-## Why Om
+## Design goals
 
 Rust proved that a language can be fast and memory-safe without a garbage
 collector. Om takes that foundation and makes different trade-offs:
@@ -190,6 +223,12 @@ The compiler is written in Rust and split into small crates. See
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
 | 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |
+
+## Getting help
+
+Om is young, so the issue tracker is the place for questions as well as bugs.
+Open an [issue](https://github.com/agnsha/om/issues/new/choose) using the bug
+report or language proposal template.
 
 ## Contributing
 

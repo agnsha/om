@@ -79,6 +79,11 @@ pub fn walk_stmt(v: &mut impl Visitor, s: &Stmt) {
             walk_expr(v, end);
             walk_block(v, body);
         }
+        Stmt::ForEach { pat, iter, body, .. } => {
+            walk_pattern(v, pat);
+            walk_expr(v, iter);
+            walk_block(v, body);
+        }
         Stmt::Return { value, .. } | Stmt::Break { value, .. } => {
             if let Some(e) = value {
                 walk_expr(v, e);

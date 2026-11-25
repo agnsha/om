@@ -1701,6 +1701,17 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// Error if local `id` is a shared borrow (`&` parameter, `&x` binding or a
+    /// `for x in &list` element): what it points to may not be changed through it.
+    fn check_not_borrowed(&self, id: usize, span: Span) -> CResult<()> {
+        let l = &self.locals[id];
+        // Plain data was copied into the binding; only shared memory must stay unchanged.
+        if l.own == Own::Borrowed && self.cg.needs_drop(&l.ty) {
+            return err(format!("cannot change `{}`: it is borrowed with `&`, so it is read-only (take it as `&mut`, or `.clone()` it)", l.name), span);
+        }
+        Ok(())
+    }
+
     /// Evaluate `e` without taking ownership. A place is read where it is; any
     /// other value is a temporary, dropped at the end of the statement.
     fn borrow_expect(&mut self, e: &Expr, expected: Option<&Ty>) -> CResult<(Vals, Ty)> {
@@ -2163,6 +2174,26 @@ impl<'a> Lower<'a> {
                 Ok(())
             }
             Stmt::Assign { target, op, value, span } => self.assign(target, *op, value, *span),
+            Stmt::ForEach { pat, iter, body, label, span } => {
+                // Looping over a borrowed list (a `&` parameter) visits it by reference, as in Rust.
+                let mut root = iter;
+                while let ExprKind::Field(i, _) | ExprKind::Index(i, _) = &root.kind {
+                    root = i;
+                }
+                let borrowed = match &root.kind {
+                    ExprKind::Var(n) => self.lookup(n).is_some_and(|l| l.own != Own::Owned),
+                    _ => false,
+                };
+                let iter = if borrowed && !matches!(iter.kind, ExprKind::Ref(..)) {
+                    Expr { kind: ExprKind::Ref(false, Box::new(iter.clone())), span: iter.span }
+                } else {
+                    iter.clone()
+                };
+                self.tmp_count += 1;
+                let s =
+                    om_parser::desugar_for_each(pat.clone(), iter, body.clone(), label.clone(), *span, self.tmp_count);
+                self.stmt(&s)
+            }
             Stmt::While { cond, body, label, .. } => {
                 let header = self.b.create_block();
                 let body_blk = self.b.create_block();
@@ -2453,6 +2484,7 @@ impl<'a> Lower<'a> {
             };
         }
         self.check_not_frozen(place.root_id, span)?;
+        self.check_not_borrowed(place.root_id, span)?;
         let whole = matches!(target.kind, ExprKind::Var(_));
         if !whole {
             self.check_usable(place.root_id, target.span)?;
@@ -2870,6 +2902,11 @@ impl<'a> Lower<'a> {
     fn binop(&mut self, op: BinOp, lv: Vals, lt: Ty, mut rv: Vals, rt: Ty, span: Span) -> CResult<(Vals, Ty)> {
         if lt == Ty::Never || rt == Ty::Never {
             return Ok((vec![], Ty::Never));
+        }
+        if matches!(op, BinOp::Eq | BinOp::Ne) && (is_string(&lt) && rt == Ty::Str || lt == Ty::Str && is_string(&rt)) {
+            // `String == str` compares the text, as in Rust. A String's first two
+            // slots (buffer, length) are a view of it.
+            return self.binop(op, lv[..2].to_vec(), Ty::Str, rv[..2].to_vec(), Ty::Str, span);
         }
         if op == BinOp::Add && is_string(&lt) && (rt == Ty::Str || is_string(&rt)) {
             // `String + str` appends, reusing the left String's buffer (as in Rust).
@@ -4121,13 +4158,13 @@ impl<'a> Lower<'a> {
             }
         }
         let ps = &def.f.params;
-        // Bind type variables from the type the caller expects back. A `Self`
-        // return is the impl's type: `let s: Stack[str] = Stack::new()`.
-        let ret_te = match (&def.f.ret, &def.impl_ty) {
-            (Some(r), Some(it)) if r.name == "Self" && r.args.is_empty() => Some(it.clone()),
-            (r, _) => r.clone(),
-        };
-        if let (Some(rt), Some(exp)) = (&ret_te, expected) {
+        // Bind type variables from the type the caller expects back.
+        if let (Some(rt), Some(exp)) = (&def.f.ret, expected) {
+            // `-> Self` in a generic impl means the impl's own type, such as `Stack[T]`.
+            let rt = match &def.impl_ty {
+                Some(it) if rt.name == "Self" && rt.args.is_empty() => it,
+                _ => rt,
+            };
             let mut trial = subst.clone();
             if self.cg.unify(rt, exp, &vars, &mut trial) {
                 subst = trial;
@@ -4176,6 +4213,7 @@ impl<'a> Lower<'a> {
                     };
                     self.check_usable(place.root_id, inner.span)?;
                     self.check_not_frozen(place.root_id, inner.span)?;
+                    self.check_not_borrowed(place.root_id, inner.span)?;
                     if !place.mutable {
                         let r = &place.root;
                         let hint = if r == "self" {

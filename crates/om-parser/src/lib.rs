@@ -92,18 +92,8 @@ pub fn parse_all(src: &str) -> (Program, Vec<ParseError>) {
         prev_end = t.span.end;
     }
     let nl = newlines_before(src, &tokens);
-    let mut p = Parser {
-        tokens,
-        nl,
-        pos: 0,
-        no_struct: false,
-        label: None,
-        tmp: 0,
-        depth: 0,
-        errors: vec![],
-        first_on_line,
-        col0,
-    };
+    let mut p =
+        Parser { tokens, nl, pos: 0, no_struct: false, label: None, depth: 0, errors: vec![], first_on_line, col0 };
     let mut prog = Program::default();
     while !p.at(&T::Eof) && p.errors.len() < MAX_ERRORS {
         let start = p.pos;
@@ -141,8 +131,6 @@ struct Parser {
     /// Per token: is it the first token on its line, and does it start at column 0?
     first_on_line: Vec<bool>,
     col0: Vec<bool>,
-    /// Counter for names of hidden variables made while desugaring.
-    tmp: usize,
     /// For each token, whether a line break comes before it.
     nl: Vec<bool>,
 }
@@ -179,62 +167,61 @@ impl Parser {
     ///   loop { match $c.pop() { Some(PAT) => body, None => break } } }
     /// ```
     fn for_each(&mut self, pat: Pattern, iter: Expr, body: Block, label: Option<String>, start: Span) -> PResult<Stmt> {
-        self.tmp += 1;
-        let (c, i) = (format!("$for{}", self.tmp), format!("$fori{}", self.tmp));
-        let span = start.to(body.span);
-        let e = |kind: ExprKind| Expr { kind, span };
-        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
-        let bind = |n: &str, m: bool| Pattern { kind: PatKind::Bind(n.to_string(), m), span };
-        let brk = || Block { stmts: vec![Stmt::Break { label: None, value: None, span }], tail: None, span };
-        let call = |recv: Expr, m: &str| Expr { kind: ExprKind::MethodCall(Box::new(recv), m.into(), vec![]), span };
-        let (setup, lp) = match iter.kind {
-            ExprKind::Ref(false, list) => {
-                let usize_ty = TypeExpr { name: "usize".into(), args: vec![], span };
-                let setup = vec![
-                    Stmt::Let { pat: bind(&c, false), ty: None, value: e(ExprKind::Ref(false, list)), span },
-                    Stmt::Let { pat: bind(&i, true), ty: Some(usize_ty), value: e(ExprKind::Int(0)), span },
-                ];
-                let done = e(ExprKind::Binary(BinOp::Ge, Box::new(var(&i)), Box::new(call(var(&c), "len"))));
-                let elem = e(ExprKind::Index(Box::new(var(&c)), Box::new(var(&i))));
-                let mut stmts = vec![
-                    Stmt::Expr(e(ExprKind::If(Box::new(done), brk(), None))),
-                    Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), span },
-                    Stmt::Assign { target: var(&i), op: Some(BinOp::Add), value: e(ExprKind::Int(1)), span },
-                ];
-                stmts.push(Stmt::Expr(e(ExprKind::Block(body))));
-                (setup, Block { stmts, tail: None, span })
-            }
-            ExprKind::Ref(true, _) => {
-                let message = "`for x in &mut list` is not supported yet; loop over indexes: `for i in 0..list.len() { list[i] ... }`";
-                return Err(ParseError { message: message.into(), span: iter.span });
-            }
-            _ => {
-                let setup = vec![
-                    Stmt::Let { pat: bind(&c, true), ty: None, value: iter, span },
-                    Stmt::Expr(call(var(&c), "reverse")),
-                ];
-                let arms = vec![
-                    Arm {
-                        pat: Pattern { kind: PatKind::Variant("Some".into(), vec![pat]), span },
-                        guard: None,
-                        body: e(ExprKind::Block(body)),
-                        span,
-                    },
-                    Arm {
-                        pat: Pattern { kind: PatKind::Wild, span },
-                        guard: None,
-                        body: e(ExprKind::Block(brk())),
-                        span,
-                    },
-                ];
-                let m = e(ExprKind::Match(Box::new(call(var(&c), "pop")), arms));
-                (setup, Block { stmts: vec![Stmt::Expr(m)], tail: None, span })
-            }
-        };
-        let mut stmts = setup;
-        stmts.push(Stmt::Expr(e(ExprKind::Loop(lp, label))));
-        Ok(Stmt::Expr(e(ExprKind::Block(Block { stmts, tail: None, span }))))
+        if let ExprKind::Ref(true, _) = iter.kind {
+            let message = "`for x in &mut list` is not supported yet; loop over indexes: `for i in 0..list.len() { list[i] ... }`";
+            return Err(ParseError { message: message.into(), span: iter.span });
+        }
+        Ok(Stmt::ForEach { pat, span: start.to(body.span), iter, body, label })
     }
+}
+
+/// Lower a `for` loop over a list into `let`, `loop` and `match`; see `Parser::for_each`.
+/// `id` makes the hidden variable names unique.
+pub fn desugar_for_each(pat: Pattern, iter: Expr, body: Block, label: Option<String>, span: Span, id: usize) -> Stmt {
+    let (c, i) = (format!("$for{id}"), format!("$fori{id}"));
+    let e = |kind: ExprKind| Expr { kind, span };
+    let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
+    let bind = |n: &str, m: bool| Pattern { kind: PatKind::Bind(n.to_string(), m), span };
+    let brk = || Block { stmts: vec![Stmt::Break { label: None, value: None, span }], tail: None, span };
+    let call = |recv: Expr, m: &str| Expr { kind: ExprKind::MethodCall(Box::new(recv), m.into(), vec![]), span };
+    let (setup, lp) = match iter.kind {
+        ExprKind::Ref(false, list) => {
+            let usize_ty = TypeExpr { name: "usize".into(), args: vec![], span };
+            let setup = vec![
+                Stmt::Let { pat: bind(&c, false), ty: None, value: e(ExprKind::Ref(false, list)), span },
+                Stmt::Let { pat: bind(&i, true), ty: Some(usize_ty), value: e(ExprKind::Int(0)), span },
+            ];
+            let done = e(ExprKind::Binary(BinOp::Ge, Box::new(var(&i)), Box::new(call(var(&c), "len"))));
+            let elem = e(ExprKind::Index(Box::new(var(&c)), Box::new(var(&i))));
+            let mut stmts = vec![
+                Stmt::Expr(e(ExprKind::If(Box::new(done), brk(), None))),
+                Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), span },
+                Stmt::Assign { target: var(&i), op: Some(BinOp::Add), value: e(ExprKind::Int(1)), span },
+            ];
+            stmts.push(Stmt::Expr(e(ExprKind::Block(body))));
+            (setup, Block { stmts, tail: None, span })
+        }
+        _ => {
+            let setup = vec![
+                Stmt::Let { pat: bind(&c, true), ty: None, value: iter, span },
+                Stmt::Expr(call(var(&c), "reverse")),
+            ];
+            let arms = vec![
+                Arm {
+                    pat: Pattern { kind: PatKind::Variant("Some".into(), vec![pat]), span },
+                    guard: None,
+                    body: e(ExprKind::Block(body)),
+                    span,
+                },
+                Arm { pat: Pattern { kind: PatKind::Wild, span }, guard: None, body: e(ExprKind::Block(brk())), span },
+            ];
+            let m = e(ExprKind::Match(Box::new(call(var(&c), "pop")), arms));
+            (setup, Block { stmts: vec![Stmt::Expr(m)], tail: None, span })
+        }
+    };
+    let mut stmts = setup;
+    stmts.push(Stmt::Expr(e(ExprKind::Loop(lp, label))));
+    Stmt::Expr(e(ExprKind::Block(Block { stmts, tail: None, span })))
 }
 
 fn is_upper(name: &str) -> bool {
@@ -1417,7 +1404,6 @@ fn interp_part(part: StrPart, depth: usize) -> PResult<InterpPart> {
                 pos: 0,
                 no_struct: false,
                 label: None,
-                tmp: 0,
                 depth,
                 errors: vec![],
                 first_on_line: vec![],

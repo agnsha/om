@@ -608,3 +608,16 @@ fn float_printing_matches_rust() {
     let want = std::fs::read_to_string(dir.join("floats.expected")).unwrap();
     assert_eq!(build_and_run(&src, "floats"), want);
 }
+
+#[test]
+fn borrowed_list_loops_self_constructors_and_string_eq() {
+    // `for s in v` over a `&Vec[String]` once freed each String twice.
+    let dir = root().join("crates/omc/tests");
+    let src = std::fs::read_to_string(dir.join("regressions.om")).unwrap();
+    let want = std::fs::read_to_string(dir.join("regressions.expected")).unwrap();
+    assert_eq!(build_and_run(&src, "regressions"), want);
+    let got = compile_error("fn f(v: &Vec[i64]) { let mut w = v; w.push(1) } fn main() {}");
+    assert!(got.contains("cannot change `w`: it is borrowed with `&`"), "{got}");
+    let got = compile_error("fn f(v: &Vec[i64]) { v[0] = 2 } fn main() {}");
+    assert!(got.contains("read-only") || got.contains("cannot"), "{got}");
+}
