@@ -51,7 +51,7 @@ fn main() {
     if let Some(root) = r { print("root {root}") }
     print(find(5, 50).is_none())
     print(find(5, 50).unwrap_or(-1))
-    print(find(10, 9).ok_or("none").unwrap())
+    print(find(10, 9).ok_or("none").expect("find(10, 9) has a root"))
 
     let (lo, hi) = min_max(9, 2)
     print("{lo} {hi}")

@@ -25,6 +25,8 @@ pub struct Function {
     pub body: Block,
     /// False for a trait method declared without a body.
     pub has_body: bool,
+    /// Declared effects: `fn log(x: i64) uses io { ... }`. `None` when not declared.
+    pub uses: Option<Vec<(String, Span)>>,
     pub span: Span,
 }
 

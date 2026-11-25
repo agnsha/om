@@ -1,4 +1,4 @@
-fn sum_bytes(a: u8, b: u8) -> u8 { a + b }
+fn sum_bytes(a: u8, b: u8) -> u8 { a.wrapping_add(b) }
 
 fn main() {
     let x: u8 = 250
