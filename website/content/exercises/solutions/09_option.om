@@ -1,0 +1,14 @@
+fn first_negative(list: &Vec[i64]) -> Option[i64] {
+    for i in 0..list.len() {
+        if list[i] < 0 {
+            return Some(list[i])
+        }
+    }
+    None
+}
+
+fn main() {
+    assert(first_negative(&[3, -2, -7]).unwrap() == -2)
+    assert(first_negative(&[1, 2]).is_none())
+    print("ok")
+}

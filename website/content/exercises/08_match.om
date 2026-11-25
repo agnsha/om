@@ -1,0 +1,24 @@
+// Exercise 8: match must be exhaustive
+// The compiler rejects this match. Add the missing case.
+// A Quarter is worth 25 cents.
+
+enum Coin {
+    Penny,
+    Nickel,
+    Dime,
+    Quarter,
+}
+
+fn cents(c: Coin) -> i64 {
+    match c {
+        Penny => 1,
+        Nickel => 5,
+        Dime => 10,
+    }
+}
+
+fn main() {
+    let total = cents(Coin::Penny) + cents(Coin::Dime) + cents(Coin::Quarter)
+    assert(total == 36)
+    print("ok")
+}

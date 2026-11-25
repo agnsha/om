@@ -1,0 +1,12 @@
+fn double_all(list: &mut Vec[i64]) {
+    for i in 0..list.len() {
+        list[i] *= 2
+    }
+}
+
+fn main() {
+    let mut v = [1, 2, 3]
+    double_all(&mut v)
+    assert(v[0] == 2 && v[1] == 4 && v[2] == 6)
+    print("ok")
+}

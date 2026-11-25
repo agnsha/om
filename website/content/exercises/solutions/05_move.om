@@ -1,0 +1,10 @@
+fn count(list: &Vec[str]) -> i64 {
+    list.len() as i64
+}
+
+fn main() {
+    let names = ["ada", "grace", "linus"]
+    print(count(&names))
+    print(names)
+    print("ok")
+}

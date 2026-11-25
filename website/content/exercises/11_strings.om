@@ -1,0 +1,13 @@
+// Exercise 11: String and str
+// `initials("Grace Brewster Hopper")` should return "GBH".
+// Hint: split_whitespace, chars, and String::push.
+
+fn initials(name: str) -> String {
+    String::new()
+}
+
+fn main() {
+    assert(initials("Grace Brewster Hopper").as_str() == "GBH")
+    assert(initials("ada").as_str() == "a")
+    print("ok")
+}

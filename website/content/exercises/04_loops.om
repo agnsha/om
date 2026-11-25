@@ -1,0 +1,15 @@
+// Exercise 4: loops
+// Make `sum_to(n)` add up 1 + 2 + ... + n using a `for` loop.
+
+fn sum_to(n: i64) -> i64 {
+    let mut total = 0
+    // your loop here
+    total
+}
+
+fn main() {
+    assert(sum_to(1) == 1)
+    assert(sum_to(10) == 55)
+    assert(sum_to(100) == 5050)
+    print("ok")
+}

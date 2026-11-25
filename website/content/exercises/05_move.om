@@ -1,0 +1,14 @@
+// Exercise 5: moves
+// This doesn't compile: `names` is used after it moved.
+// Fix it by changing one line, without removing any print.
+
+fn count(list: Vec[str]) -> i64 {
+    list.len() as i64
+}
+
+fn main() {
+    let names = ["ada", "grace", "linus"]
+    print(count(names))
+    print(names)
+    print("ok")
+}

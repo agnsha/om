@@ -1,0 +1,13 @@
+// Exercise 3: if is an expression
+// Finish `bigger` so it returns the larger of the two numbers.
+
+fn bigger(a: i64, b: i64) -> i64 {
+    0
+}
+
+fn main() {
+    assert(bigger(10, 3) == 10)
+    assert(bigger(-1, 7) == 7)
+    assert(bigger(5, 5) == 5)
+    print("ok")
+}

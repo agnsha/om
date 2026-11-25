@@ -1,0 +1,19 @@
+// Exercise 7: structs and methods
+// Add the methods `area` and `scale` to `Rect` so main works.
+
+struct Rect {
+    w: i64,
+    h: i64,
+}
+
+impl Rect {
+}
+
+fn main() {
+    let mut r = Rect { w: 2, h: 3 }
+    assert(r.area() == 6)
+    r.scale(2)
+    assert(r.w == 4 && r.h == 6)
+    assert(r.area() == 24)
+    print("ok")
+}

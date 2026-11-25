@@ -1,0 +1,27 @@
+// Vec[T] is a growable list that owns its elements.
+fn main() {
+    let mut v: Vec[i64] = Vec::new()
+    for i in 1..=5 { v.push(i * i) }
+    print(v)
+    print(v.len())
+    print(v[2])
+    v[0] = 100
+    print(v.pop())
+    print(v.first())
+    print(v.contains(&9))
+
+    let mut w = [5, 3, 9, 1, 3]
+    w.sort()
+    w.dedup()
+    print(w)
+
+    let zeros = [0; 4]
+    print(zeros)
+
+    let mut total = 0
+    for x in &w { total += x }
+    print("sum = {total}")
+
+    let grid = [[1, 2], [3, 4]]
+    print(grid[1][0])
+}
