@@ -258,7 +258,7 @@ fn rejects_bad_programs() {
         ("fn f(a: i64) {} fn main() { f(1, 2) }", "takes 1 argument(s) but 2 were given"),
         ("fn f() {} fn f() {} fn main() {}", "defined twice"),
         ("fn helper() {}", "no `fn main()`"),
-        ("fn main() { let s: str = 5 }", "declared as str but its value is i64"),
+        ("fn main() { let s: str = 5 }", "expected str, but the value is i64"),
         ("fn main() { let v = if true { 1 } else { false } }", "different types"),
         ("fn f(a: i64 = 1, b: i64) {} fn main() {}", "`b` needs a default"),
         ("fn f(a: i64 = true) {} fn main() {}", "default for `a` is bool"),
@@ -287,6 +287,114 @@ fn rejects_bad_programs() {
         ("struct A { b: B } struct B { a: A } fn main() {}", "contains itself"),
         ("enum E { A(i64) } fn main() { match E::A(1) { E::A(x, y) => 1 } }", "has 1 field(s), but the pattern has 2"),
         ("fn main() { let x = 1; x.foo() }", "i64 has no methods yet"),
+    ];
+    for (src, want) in cases {
+        let got = compile_error(src);
+        assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
+    }
+}
+
+fn run_status(src: &str, name: &str) -> (String, String, i32) {
+    let dir = std::env::temp_dir().join(format!("om-e2e-status-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join(name);
+    omc::build(src, &exe).expect("build should succeed");
+    let out = std::process::Command::new(&exe).output().unwrap();
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn generics_option_result_and_try() {
+    let src = r#"
+        struct Wrap[T] { v: T }
+        impl[T] Wrap[T] { fn get(self) -> T { self.v } }
+        enum List[T] { Nil, One(T) }
+        fn id[T](x: T) -> T { x }
+        fn half(n: i64) -> Result[i64, str] { if n % 2 == 1 { return Err("odd") } Ok(n / 2) }
+        fn quarter(n: i64) -> Result[i64, str] { let h = half(n)?; half(h) }
+        fn first_neg(a: i64, b: i64) -> Option[i64] { if a < 0 { return Some(a) } if b < 0 { Some(b) } else { None } }
+        fn both(a: i64, b: i64) -> Option[i64] { let x = first_neg(a, 0)?; let y = first_neg(b, 0)?; Some(x + y) }
+        fn main() {
+            print(id(id(5)) + 1)
+            print(Wrap { v: "w" }.get())
+            let l: List[bool] = List::One(true)
+            print(l)
+            print(quarter(8))
+            print(quarter(6))
+            print(both(-1, -2))
+            print(both(-1, 2))
+            print(first_neg(3, -4).unwrap_or(0))
+            print(half(3).is_err())
+            print(half(4).ok())
+            let none: Option[i64] = None
+            print(none.unwrap_or(9))
+        }
+    "#;
+    assert_eq!(
+        build_and_run(src, "generics"),
+        "6\nw\nOne(true)\nOk(2)\nErr(\"odd\")\nSome(-3)\nNone\n-4\ntrue\nSome(2)\n9\n"
+    );
+}
+
+#[test]
+fn tuples_patterns_if_let_and_while_let() {
+    let src = r#"
+        fn split(n: i64) -> (i64, i64) { (n / 10, n % 10) }
+        fn main() {
+            let (tens, ones) = split(47)
+            print("{tens} {ones}")
+            let t = (1, (false, "x"))
+            print(t.1.1)
+            let (a, (mut b, _)) = t
+            b = !b
+            print("{a} {b}")
+            let maybe = Some(5)
+            if let Some(v) = maybe { print(v) } else { print("none") }
+            if let None = maybe { print("bad") } else { print("some") }
+            let mut n: Option[i64] = Some(3)
+            let mut total = 0
+            while let Some(k) = n {
+                total += k
+                n = if k > 1 { Some(k - 1) } else { None }
+            }
+            print(total)
+            print(match (1, true) { (0, _) => "zero", (_, true) => "yes", (_, false) => "no" })
+        }
+    "#;
+    assert_eq!(build_and_run(src, "tuples"), "4 7\nx\n1 true\n5\nsome\n6\nyes\n");
+}
+
+#[test]
+fn panic_and_assert_exit_101() {
+    let (out, err, code) = run_status(r#"fn main() { print("before") panic("bad {1 + 1}") }"#, "panic");
+    assert_eq!((out.as_str(), err.as_str(), code), ("before\n", "panic: bad 2\n", 101));
+    let (_, err, code) = run_status("fn main() { let x: Option[i64] = None; print(x.unwrap()) }", "unwrap");
+    assert_eq!((err.as_str(), code), ("panic: called `Option::unwrap()` on a `None` value\n", 101));
+    let (_, err, code) = run_status("fn main() { assert(1 > 2) }", "assert");
+    assert_eq!((err.as_str(), code), ("panic: assertion failed\n", 101));
+    let (_, err, code) = run_status(r#"fn main() { assert(false, "must hold") }"#, "assert_msg");
+    assert_eq!((err.as_str(), code), ("panic: must hold\n", 101));
+    let (out, _, code) = run_status("fn main() { assert(1 < 2) print(1) }", "assert_ok");
+    assert_eq!((out.as_str(), code), ("1\n", 0));
+}
+
+#[test]
+fn rejects_bad_generic_programs() {
+    let cases = [
+        ("fn f() -> i64 { let a = Some(2)?; a } fn main() {}", "can only be used in a function that returns Option"),
+        (
+            "fn f() -> Result[i64, bool] { let a: Result[i64, str] = Ok(1); let b = a?; Ok(b) } fn main() {}",
+            "cannot convert the error type str into bool",
+        ),
+        ("fn main() { let Some(x) = Some(1) }", "might not match"),
+        ("fn main() { let x = None }", "cannot infer type `T`"),
+        ("fn main() { let (a, b) = (1, 2, 3) }", "tuple of 2"),
+        ("fn id[T](x: T) -> T { x } fn main() { let a: bool = id(1) }", "i64"),
+        ("struct W[T] { v: T } fn main() { let w: W[i64] = W { v: true } }", "bool"),
     ];
     for (src, want) in cases {
         let got = compile_error(src);

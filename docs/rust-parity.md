@@ -35,7 +35,7 @@ works, ⬜ planned.
 | Enums with unit and tuple variants | ✅ | Struct-like variants `V { x }` ⬜ |
 | `impl` blocks, methods, associated functions, `Self` | ✅ | |
 | `self`, `&self`, `&mut self`, `mut self` | ✅ | |
-| Tuples `(a, b)` | ⬜ | Next batch |
+| Tuples `(a, b)`, `.0` indexing, nested tuples | ✅ | |
 | Arrays `[T; N]` and slices | ⬜ | Next batch |
 | `String`, `Vec<T>`, `HashMap<K, V>`, `Box<T>` | ⬜ | Need the heap and the ownership checker |
 | Recursive types | ⬜ | Need `Box`; rejected with a clear error today |
@@ -51,8 +51,10 @@ works, ⬜ planned.
 | Or-patterns `A \| B` | 🟡 | Without bindings |
 | Match guards `if cond` | ✅ | |
 | Exhaustiveness checking with a missing-case example | ✅ | Same matrix algorithm family as rustc |
-| `if let`, `while let`, `let else` | ⬜ | Next batch |
-| Destructuring in `let`, struct patterns, `..` rest patterns, `@` bindings | ⬜ | |
+| `if let`, `while let` | ✅ | `let else` ⬜ |
+| Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
+| Tuple patterns in `match` | ✅ | |
+| Struct patterns, `..` rest patterns, `@` bindings | ⬜ | |
 | String patterns | ⬜ | |
 
 ## Ownership and references
@@ -71,14 +73,16 @@ works, ⬜ planned.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Generic functions and types | ⬜ | Next batch, monomorphized like Rust |
+| Generic functions, structs, enums and `impl` blocks | ✅ | Monomorphized like Rust; written `f[T]`, `Pair[A, B]` |
+| Type inference for generic calls | 🟡 | From arguments and from the expected type; inference from later uses ⬜ |
 | Traits, `impl Trait for Type`, default methods | ⬜ | |
 | Trait bounds, `where` clauses | ⬜ | |
 | Trait objects `dyn Trait` | ⬜ | |
 | Associated types and constants | ⬜ | |
 | Operator overloading (`Add`, `Index`, …) | ⬜ | |
 | `#[derive(...)]` | 🟡 | Printing works on any struct or enum with no derive needed |
-| `Option<T>`, `Result<T, E>`, `?` operator | ⬜ | Next batch |
+| `Option[T]`, `Result[T, E]` and their core methods | ✅ | Written in Om itself (`prelude.om`); more methods arrive with closures |
+| `?` operator | ✅ | On Option and Result; error conversion (`From`) ⬜ |
 | Closures and `Fn` traits | ⬜ | |
 | Iterators and adapters (`map`, `filter`, `collect`) | ⬜ | |
 | Macros (`macro_rules!`) | ⬜ | Om plans compile-time functions instead |
@@ -91,7 +95,7 @@ works, ⬜ planned.
 | Packages and a package manager | ⬜ | |
 | Built-in tests (`om test`) | ⬜ | |
 | Formatter (`om fmt`) | ⬜ | |
-| Panics with messages, `assert!` | ⬜ | |
+| `panic`, `assert`, `unwrap`/`expect` | ✅ | Message on stderr, exit code 101 like Rust |
 | Threads, `Send`/`Sync`, async | ⬜ | Om plans structured concurrency |
 | C FFI (`extern`) | ⬜ | |
 

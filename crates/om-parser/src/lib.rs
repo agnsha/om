@@ -144,8 +144,51 @@ impl Parser {
     }
 
     fn ty(&mut self) -> PResult<TypeExpr> {
+        let start = self.peek().span;
+        if self.eat(&T::LParen) {
+            // `()`, `(T)`, `(T,)`, `(A, B)`
+            let mut args = Vec::new();
+            let mut trailing_comma = false;
+            while !self.at(&T::RParen) {
+                args.push(self.ty()?);
+                trailing_comma = self.eat(&T::Comma);
+                if !trailing_comma {
+                    break;
+                }
+            }
+            let end = self.expect(T::RParen)?;
+            if args.len() == 1 && !trailing_comma {
+                return Ok(args.pop().unwrap());
+            }
+            return Ok(TypeExpr { name: TypeExpr::TUPLE.into(), args, span: start.to(end) });
+        }
         let (name, span) = self.ident()?;
-        Ok(TypeExpr { name, span })
+        let mut args = Vec::new();
+        if self.eat(&T::LBracket) {
+            while !self.at(&T::RBracket) {
+                args.push(self.ty()?);
+                if !self.eat(&T::Comma) {
+                    break;
+                }
+            }
+            self.expect(T::RBracket)?;
+        }
+        Ok(TypeExpr { name, args, span: span.to(self.prev_span()) })
+    }
+
+    /// Optional generic parameter list: `[T, U]`.
+    fn generics(&mut self) -> PResult<Vec<String>> {
+        let mut out = Vec::new();
+        if self.eat(&T::LBracket) {
+            while !self.at(&T::RBracket) {
+                out.push(self.ident()?.0);
+                if !self.eat(&T::Comma) {
+                    break;
+                }
+            }
+            self.expect(T::RBracket)?;
+        }
+        Ok(out)
     }
 
     /// Run `f` with struct literals allowed again (inside parentheses, blocks, arguments).
@@ -169,6 +212,7 @@ impl Parser {
     fn function(&mut self) -> PResult<Function> {
         let start = self.expect(T::Fn)?;
         let (name, _) = self.ident()?;
+        let generics = self.generics()?;
         self.expect(T::LParen)?;
         let mut params = Vec::new();
         while !self.at(&T::RParen) {
@@ -180,7 +224,7 @@ impl Parser {
         self.expect(T::RParen)?;
         let ret = if self.eat(&T::Arrow) { Some(self.ty()?) } else { None };
         let body = self.block()?;
-        Ok(Function { name, params, ret, span: start.to(body.span), body })
+        Ok(Function { name, generics, params, ret, span: start.to(body.span), body })
     }
 
     fn param(&mut self) -> PResult<Param> {
@@ -232,6 +276,7 @@ impl Parser {
     fn struct_def(&mut self) -> PResult<StructDef> {
         let start = self.expect(T::Struct)?;
         let (name, _) = self.ident()?;
+        let generics = self.generics()?;
         self.expect(T::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&T::RBrace) {
@@ -243,12 +288,13 @@ impl Parser {
             }
         }
         let end = self.expect(T::RBrace)?;
-        Ok(StructDef { name, fields, span: start.to(end) })
+        Ok(StructDef { name, generics, fields, span: start.to(end) })
     }
 
     fn enum_def(&mut self) -> PResult<EnumDef> {
         let start = self.expect(T::Enum)?;
         let (name, _) = self.ident()?;
+        let generics = self.generics()?;
         self.expect(T::LBrace)?;
         let mut variants = Vec::new();
         while !self.at(&T::RBrace) {
@@ -269,11 +315,12 @@ impl Parser {
             }
         }
         let end = self.expect(T::RBrace)?;
-        Ok(EnumDef { name, variants, span: start.to(end) })
+        Ok(EnumDef { name, generics, variants, span: start.to(end) })
     }
 
     fn impl_block(&mut self) -> PResult<ImplBlock> {
         let start = self.expect(T::Impl)?;
+        let generics = self.generics()?;
         let ty = self.ty()?;
         self.expect(T::LBrace)?;
         let mut methods = Vec::new();
@@ -281,7 +328,7 @@ impl Parser {
             methods.push(self.function()?);
         }
         let end = self.expect(T::RBrace)?;
-        Ok(ImplBlock { ty, methods, span: start.to(end) })
+        Ok(ImplBlock { generics, ty, methods, span: start.to(end) })
     }
 
     fn const_def(&mut self) -> PResult<ConstDef> {
@@ -330,12 +377,39 @@ impl Parser {
         match self.peek().kind {
             T::Let => {
                 self.bump();
-                let mutable = self.eat(&T::Mut);
-                let (name, _) = self.ident()?;
+                let pat = self.pattern()?;
                 let ty = if self.eat(&T::Colon) { Some(self.ty()?) } else { None };
                 self.expect(T::Eq)?;
                 let value = self.expr()?;
-                Ok(Stmt::Let { name, mutable, ty, span: start.to(value.span), value })
+                Ok(Stmt::Let { pat, ty, span: start.to(value.span), value })
+            }
+            T::While if self.peek_at(1) == &T::Let => {
+                // `while let P = e { body }` is `loop { match e { P => body, _ => break } }`.
+                self.bump();
+                self.bump();
+                let pat = self.pattern()?;
+                self.expect(T::Eq)?;
+                let scrut = self.header_expr()?;
+                let body = self.block()?;
+                let span = start.to(body.span);
+                let brk = Block { stmts: vec![Stmt::Break { value: None, span }], tail: None, span };
+                let arms = vec![
+                    Arm {
+                        span: pat.span,
+                        pat,
+                        guard: None,
+                        body: Expr { span: body.span, kind: ExprKind::Block(body) },
+                    },
+                    Arm {
+                        pat: Pattern { kind: PatKind::Wild, span },
+                        guard: None,
+                        span,
+                        body: Expr { kind: ExprKind::Block(brk), span },
+                    },
+                ];
+                let m = Expr { kind: ExprKind::Match(Box::new(scrut), arms), span };
+                let lp = Block { stmts: vec![Stmt::Expr(m)], tail: None, span };
+                Ok(Stmt::Expr(Expr { kind: ExprKind::Loop(lp), span }))
             }
             T::While => {
                 self.bump();
@@ -468,7 +542,41 @@ impl Parser {
 
     fn postfix(&mut self) -> PResult<Expr> {
         let mut e = self.primary()?;
-        while self.eat(&T::Dot) {
+        loop {
+            if self.at(&T::Question) {
+                let end = self.bump().span;
+                let span = e.span.to(end);
+                e = Expr { kind: ExprKind::Try(Box::new(e)), span };
+                continue;
+            }
+            if !self.eat(&T::Dot) {
+                break;
+            }
+            // Tuple fields: `t.0`. The lexer reads `t.0.1` as `t`, `.`, `0.1`.
+            match self.peek().kind.clone() {
+                T::Int(n) => {
+                    let span = e.span.to(self.bump().span);
+                    e = Expr { kind: ExprKind::Field(Box::new(e), n.to_string()), span };
+                    continue;
+                }
+                T::Float(_) => {
+                    let tok = self.bump();
+                    let span = e.span.to(tok.span);
+                    // Recover both indexes from the token's text length is not possible; use the value.
+                    let text = format!(
+                        "{}",
+                        match tok.kind {
+                            T::Float(x) => x,
+                            _ => unreachable!(),
+                        }
+                    );
+                    for part in text.split('.') {
+                        e = Expr { kind: ExprKind::Field(Box::new(e), part.to_string()), span };
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             let (name, nspan) = self.ident()?;
             if self.at(&T::LParen) {
                 let args = self.args()?;
@@ -560,10 +668,25 @@ impl Parser {
             }
             T::LParen => {
                 self.bump();
-                let mut inner = self.nested(|p| p.expr())?;
+                let (mut items, trailing) = self.nested(|p| {
+                    let mut items = Vec::new();
+                    let mut trailing = false;
+                    while !p.at(&T::RParen) {
+                        items.push(p.expr()?);
+                        trailing = p.eat(&T::Comma);
+                        if !trailing {
+                            break;
+                        }
+                    }
+                    Ok((items, trailing))
+                })?;
                 let end = self.expect(T::RParen)?;
-                inner.span = span.to(end);
-                return Ok(inner);
+                if items.len() == 1 && !trailing {
+                    let mut inner = items.pop().unwrap();
+                    inner.span = span.to(end);
+                    return Ok(inner);
+                }
+                return Ok(Expr { kind: ExprKind::Tuple(items), span: span.to(end) });
             }
             T::If => return self.if_expr(),
             T::Match => return self.match_expr(),
@@ -603,6 +726,34 @@ impl Parser {
 
     fn if_expr(&mut self) -> PResult<Expr> {
         let start = self.expect(T::If)?;
+        if self.eat(&T::Let) {
+            // `if let P = e { a } else { b }` is `match e { P => { a }, _ => { b } }`.
+            let pat = self.pattern()?;
+            self.expect(T::Eq)?;
+            let scrut = self.header_expr()?;
+            let then = self.block()?;
+            let els = if self.eat(&T::Else) {
+                if self.at(&T::If) {
+                    let nested = self.if_expr()?;
+                    Block { span: nested.span, stmts: vec![], tail: Some(Box::new(nested)) }
+                } else {
+                    self.block()?
+                }
+            } else {
+                Block { stmts: vec![], tail: None, span: then.span }
+            };
+            let span = start.to(els.span);
+            let arms = vec![
+                Arm { span: pat.span, pat, guard: None, body: Expr { span: then.span, kind: ExprKind::Block(then) } },
+                Arm {
+                    pat: Pattern { kind: PatKind::Wild, span: els.span },
+                    guard: None,
+                    span: els.span,
+                    body: Expr { span: els.span, kind: ExprKind::Block(els) },
+                },
+            ];
+            return Ok(Expr { kind: ExprKind::Match(Box::new(scrut), arms), span });
+        }
         let cond = self.header_expr()?;
         let then = self.block()?;
         let els = if self.eat(&T::Else) {
@@ -691,6 +842,22 @@ impl Parser {
                 }
             }
             T::True | T::False => PatKind::Bool(self.bump().kind == T::True),
+            T::Mut => {
+                self.bump();
+                PatKind::Bind(self.ident()?.0, true)
+            }
+            T::LParen => {
+                self.bump();
+                let mut subs = Vec::new();
+                while !self.at(&T::RParen) {
+                    subs.push(self.pattern()?);
+                    if !self.eat(&T::Comma) {
+                        break;
+                    }
+                }
+                self.expect(T::RParen)?;
+                PatKind::Tuple(subs)
+            }
             T::Ident(name) if name == "_" => {
                 self.bump();
                 PatKind::Wild
@@ -711,7 +878,7 @@ impl Parser {
                 } else if path.contains("::") || is_upper(&path) {
                     PatKind::Variant(path, vec![])
                 } else {
-                    PatKind::Bind(path)
+                    PatKind::Bind(path, false)
                 }
             }
             _ => return self.error("a pattern"),
@@ -793,7 +960,7 @@ mod tests {
         let f = &parse(src).unwrap().functions[0];
         assert_eq!(f.params.len(), 1);
         assert_eq!(f.body.stmts.len(), 4);
-        assert!(matches!(f.body.stmts[0], Stmt::Let { mutable: true, .. }));
+        assert!(matches!(&f.body.stmts[0], Stmt::Let { pat, .. } if pat.kind == PatKind::Bind("i".into(), true)));
         assert!(matches!(f.body.stmts[3], Stmt::Return { .. }));
     }
 
@@ -879,7 +1046,7 @@ mod tests {
         let ExprKind::Match(_, arms) = &p.functions[1].body.tail.as_ref().unwrap().kind else { panic!() };
         assert!(matches!(arms[1].pat.kind, PatKind::Range(1, 9, true)));
         assert!(matches!(arms[2].pat.kind, PatKind::Int(-5)));
-        assert!(matches!(arms[3].pat.kind, PatKind::Bind(_)));
+        assert!(matches!(arms[3].pat.kind, PatKind::Bind(_, false)));
     }
 
     #[test]
@@ -894,6 +1061,36 @@ mod tests {
         assert!(matches!(body.stmts[1], Stmt::For { inclusive: false, .. }));
         assert!(matches!(&body.stmts[2], Stmt::Let { value, .. } if matches!(value.kind, ExprKind::Loop(_))));
         assert!(matches!(body.stmts[3], Stmt::Assign { op: Some(BinOp::Sub), .. }));
+    }
+
+    #[test]
+    fn generics_tuples_try_and_if_let() {
+        let src = "
+            struct Pair[A, B] { a: A, b: B }
+            enum Opt[T] { Some(T), None }
+            impl[T] Opt[T] { fn get(self, d: T) -> T { d } }
+            fn first[T](p: (T, T)) -> Result[T, str] {
+                let (x, mut y) = p
+                let v = parse(x)?.0
+                if let Opt::Some(z) = make() { y = z } else { return Err(\"no\") }
+                while let Some(n) = next() { print(n) }
+                Ok(())
+            }";
+        let p = parse(src).unwrap();
+        assert_eq!(p.structs[0].generics, vec!["A", "B"]);
+        assert_eq!(p.impls[0].generics, vec!["T"]);
+        let f = &p.functions[0];
+        assert_eq!(f.generics, vec!["T"]);
+        assert_eq!(f.params[0].ty.as_ref().unwrap().name, TypeExpr::TUPLE);
+        assert_eq!(f.ret.as_ref().unwrap().args.len(), 2);
+        assert!(matches!(&f.body.stmts[0], Stmt::Let { pat, .. } if matches!(pat.kind, PatKind::Tuple(_))));
+        assert!(matches!(&f.body.stmts[1], Stmt::Let { value, .. }
+            if matches!(&value.kind, ExprKind::Field(inner, n) if n == "0" && matches!(inner.kind, ExprKind::Try(_)))));
+        assert!(matches!(&f.body.stmts[2], Stmt::Expr(e) if matches!(e.kind, ExprKind::Match(..))));
+        assert!(matches!(&f.body.stmts[3], Stmt::Expr(e) if matches!(e.kind, ExprKind::Loop(_))));
+        assert!(
+            matches!(&f.body.tail.as_ref().unwrap().kind, ExprKind::Call(n, a) if n == "Ok" && matches!(a[0].value.kind, ExprKind::Tuple(ref t) if t.is_empty()))
+        );
     }
 
     #[test]

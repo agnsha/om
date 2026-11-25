@@ -1,0 +1,101 @@
+// The Om prelude: types and methods every program can use without importing them.
+// Variant order matters: the compiler's `?` operator expects the success variant first.
+
+enum Option[T] {
+    Some(T),
+    None,
+}
+
+enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+impl[T] Option[T] {
+    fn is_some(&self) -> bool {
+        match self {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        !self.is_some()
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Some(v) => v,
+            None => panic("called `Option::unwrap()` on a `None` value"),
+        }
+    }
+
+    fn expect(self, message: str) -> T {
+        match self {
+            Some(v) => v,
+            None => panic(message),
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Some(v) => v,
+            None => default,
+        }
+    }
+
+    fn ok_or[E](self, error: E) -> Result[T, E] {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(error),
+        }
+    }
+}
+
+impl[T, E] Result[T, E] {
+    fn is_ok(&self) -> bool {
+        match self {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    fn is_err(&self) -> bool {
+        !self.is_ok()
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err(_) => panic("called `Result::unwrap()` on an `Err` value"),
+        }
+    }
+
+    fn expect(self, message: str) -> T {
+        match self {
+            Ok(v) => v,
+            Err(_) => panic(message),
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Ok(v) => v,
+            Err(_) => default,
+        }
+    }
+
+    fn ok(self) -> Option[T] {
+        match self {
+            Ok(v) => Some(v),
+            Err(_) => None,
+        }
+    }
+
+    fn err(self) -> Option[E] {
+        match self {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        }
+    }
+}

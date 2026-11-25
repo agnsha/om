@@ -14,6 +14,8 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
+    /// Generic type parameters: `fn first[T](...)`.
+    pub generics: Vec<String>,
     pub params: Vec<Param>,
     /// `None` means the function returns nothing (unit).
     pub ret: Option<TypeExpr>,
@@ -45,16 +47,28 @@ pub struct Param {
     pub span: Span,
 }
 
-/// A type as written in source, e.g. `i64` or `Point`. Resolved later by the checker.
+/// A type as written in source, e.g. `i64`, `Point`, `Option[T]` or `(i64, bool)`.
+/// Tuples use the name [`TypeExpr::TUPLE`] with the element types as `args`;
+/// the unit type `()` is an empty tuple.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeExpr {
     pub name: String,
+    pub args: Vec<TypeExpr>,
     pub span: Span,
+}
+
+impl TypeExpr {
+    pub const TUPLE: &'static str = "(tuple)";
+
+    pub fn simple(name: &str, span: Span) -> TypeExpr {
+        TypeExpr { name: name.to_string(), args: vec![], span }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
+    pub generics: Vec<String>,
     pub fields: Vec<(String, TypeExpr)>,
     pub span: Span,
 }
@@ -62,6 +76,7 @@ pub struct StructDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    pub generics: Vec<String>,
     pub variants: Vec<Variant>,
     pub span: Span,
 }
@@ -76,6 +91,8 @@ pub struct Variant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
+    /// `impl[T] Stack[T]` declares `T`.
+    pub generics: Vec<String>,
     pub ty: TypeExpr,
     pub methods: Vec<Function>,
     pub span: Span,
@@ -99,9 +116,9 @@ pub struct Block {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    /// `let pattern (: type)? = value`; the pattern must always match (a name or a tuple).
     Let {
-        name: String,
-        mutable: bool,
+        pat: Pattern,
         ty: Option<TypeExpr>,
         value: Expr,
         span: Span,
@@ -215,6 +232,10 @@ pub enum ExprKind {
     StructLit(String, Vec<(String, Expr)>),
     /// `&x` or `&mut x` passed as an argument.
     Ref(bool, Box<Expr>),
+    /// `(a, b)`; `()` is the unit value.
+    Tuple(Vec<Expr>),
+    /// `value?`: unwrap an `Ok`/`Some`, or return the `Err`/`None` early.
+    Try(Box<Expr>),
     /// `value as Type`
     Cast(Box<Expr>, TypeExpr),
     /// An interpolated string: `"x = {x}"`.
@@ -257,8 +278,10 @@ pub struct Pattern {
 pub enum PatKind {
     /// `_`
     Wild,
-    /// A lowercase name binds the matched value.
-    Bind(String),
+    /// A lowercase name binds the matched value; `mut x` makes the binding mutable.
+    Bind(String, bool),
+    /// `(a, b)`
+    Tuple(Vec<Pattern>),
     Int(i64),
     Bool(bool),
     /// `1..=5` or `0..10`

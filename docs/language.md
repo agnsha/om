@@ -18,6 +18,8 @@ later phases are in the [design document](design.md).
 | `f64` | 64-bit float. Literals need a digit after the dot: `1.0`, `0.5`. |
 | `bool` | `true` or `false` |
 | `str` | A string literal. Strings can be stored, passed and printed, not yet built at runtime. |
+| `(A, B, ...)` | A tuple. Read fields with `.0`, `.1`, or destructure with `let (a, b) = t`. |
+| `Option[T]`, `Result[T, E]` | Built in, see below. |
 
 Integer literals may use `_` as a separator: `1_000_000`.
 String escapes: `\n \t \r \0 \\ \"`.
@@ -260,11 +262,73 @@ let result = 3 |> double |> add(4) |> square    // square(add(double(3), 4)) = 1
 *Why:* Rust needs nested calls or method syntax on a trait. Pipelines are a
 favourite in Elixir, F# and Gleam, and JavaScript has a proposal for one.
 
+## Generics
+
+Type parameters go in square brackets. Om generates a specialised copy for
+each set of types used (monomorphization), so generic code runs as fast as
+hand-written code, the same as Rust.
+
+```om
+struct Pair[A, B] { first: A, second: B }
+
+impl[A, B] Pair[A, B] {
+    fn swap(self) -> Pair[B, A] { Pair { first: self.second, second: self.first } }
+}
+
+fn pick[T](a: T, b: T, first: bool) -> T { if first { a } else { b } }
+```
+
+Type arguments are inferred from the arguments and from the expected type
+(`let x: Option[i64] = None`). Trait bounds are not here yet, so a generic
+body can only move its `T` values around, not do arithmetic on them.
+
+## Option, Result and `?`
+
+```om
+enum Option[T] { Some(T), None }
+enum Result[T, E] { Ok(T), Err(E) }
+```
+
+Both are written in Om in the compiler's prelude, and `Some`, `None`, `Ok`
+and `Err` can be used without a prefix. Methods: `is_some`, `is_none`,
+`unwrap`, `expect`, `unwrap_or`, `ok_or` on Option, and `is_ok`, `is_err`,
+`unwrap`, `expect`, `unwrap_or`, `ok`, `err` on Result.
+
+`expr?` unwraps a success value or returns the failure from the current
+function, which must return the same kind (Option or Result with the same
+error type).
+
+```om
+fn calc(a: i64, b: i64) -> Result[i64, str] {
+    let q = div(a, b)?
+    Ok(q * 2)
+}
+```
+
+## Patterns everywhere
+
+```om
+let (lo, hi) = min_max(9, 2)
+if let Some(root) = find(49) { print(root) } else { print("none") }
+while let Some(n) = stack { ... }
+```
+
+A `let` pattern must always match; use `if let` or `match` for patterns that
+might fail.
+
+## Panics
+
+`panic("message {x}")`, `assert(cond)` and `assert(cond, "message")` print
+`panic: ...` to stderr and exit with code 101, as Rust does. `unwrap` and
+`expect` panic the same way.
+
 ## Built-in functions
 
 | Function | Effect |
 |---|---|
-| `print(x)` | Prints an `i64`, `bool`, `str` or interpolated string, followed by a newline |
+| `print(x)` | Prints any value (numbers, strings, tuples, structs, enums), followed by a newline |
+| `panic(msg)` | Prints `panic: msg` to stderr and exits with code 101 |
+| `assert(cond)`, `assert(cond, msg)` | Panics if `cond` is false |
 
 ## Program entry
 
