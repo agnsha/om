@@ -1,0 +1,76 @@
+name: Release
+
+# Push a tag like `v0.1.0` (or run this workflow by hand with a tag name) to
+# build `om` for Windows, Linux and macOS and attach the archives to a GitHub
+# release for that tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update, such as v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --bin om
+      - name: Smoke test
+        shell: bash
+        run: ./target/release/om run examples/hello.om
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "om-${{ matrix.target }}"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/release/om.exe, README.md, LICENSE-MIT, LICENSE-APACHE, docs/windows.md $dir
+          Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip"
+      - name: Package (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          dir="om-${{ matrix.target }}"
+          mkdir "$dir"
+          cp target/release/om README.md LICENSE-MIT LICENSE-APACHE "$dir"
+          tar czf "$dir.tar.gz" "$dir"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: om-${{ matrix.target }}
+          path: om-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Om $TAG" --generate-notes --target "${{ github.sha }}"
+          gh release upload "$TAG" dist/* --clobber

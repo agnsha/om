@@ -1,0 +1,2449 @@
+// THE HOLLOW BELL
+//
+// A stealth roguelike of sound, silence and spoken spells, written in Om.
+//
+// You are a novice monk sent down into the drowned monastery under the
+// mountain to strike the Hollow Bell. You have no sword. You fight by chanting
+// mantras built from syllables (KA = bolt, OM = strike, so "ka om" is a
+// striking bolt), and every sound you make travels through the halls: through
+// open doors, muffled by closed ones, swallowed by hushed ground. Some of what
+// lives down here is blind and hunts only by ear.
+//
+// Run it with:  om run games/hollow-bell/hollow_bell.om
+// Press ? in game for help.
+
+// ---------------------------------------------------------------- constants
+
+const W: i64 = 58
+const H: i64 = 19
+const MAX_DEPTH: i64 = 6
+const VIEW_R: i64 = 9
+
+// Tiles
+const T_WALL: i64 = 0
+const T_FLOOR: i64 = 1
+const T_DOOR: i64 = 2
+const T_OPEN: i64 = 3
+const T_WATER: i64 = 4
+const T_GRASS: i64 = 5
+const T_CHASM: i64 = 6
+const T_STAIRS: i64 = 7
+const T_BELL: i64 = 8
+const T_ASH: i64 = 9
+
+// Items lying on the floor
+const I_NONE: i64 = 0
+const I_HERB: i64 = 1
+const I_TABLET: i64 = 2
+const I_SHARD: i64 = 3
+const I_INCENSE: i64 = 4
+
+// Syllables. The first four are forms (where the mantra goes), the rest are
+// forces (what it does when it gets there).
+const S_KA: i64 = 0
+const S_RA: i64 = 1
+const S_MU: i64 = 2
+const S_SU: i64 = 3
+const S_OM: i64 = 4
+const S_HAI: i64 = 5
+const S_VU: i64 = 6
+const S_NA: i64 = 7
+const S_SHA: i64 = 8
+const S_LO: i64 = 9
+const NSYL: i64 = 10
+
+// Creatures
+const M_RAT: i64 = 0
+const M_MONK: i64 = 1
+const M_WISP: i64 = 2
+const M_LISTENER: i64 = 3
+const M_SHADE: i64 = 4
+const M_GOLEM: i64 = 5
+const M_KEEPER: i64 = 6
+
+// What a creature is doing
+const ST_ASLEEP: i64 = 0
+const ST_WANDER: i64 = 1
+const ST_SEARCH: i64 = 2
+const ST_HUNT: i64 = 3
+const ST_FLEE: i64 = 4
+
+// Keys
+const K_UP: i64 = 1000
+const K_DOWN: i64 = 1001
+const K_RIGHT: i64 = 1002
+const K_LEFT: i64 = 1003
+const K_ESC: i64 = 27
+const K_ENTER: i64 = 10
+
+// Colours (ANSI)
+const RESET: str = "\x1b[0m"
+const DIM: str = "\x1b[90m"
+const RED: str = "\x1b[91m"
+const GREEN: str = "\x1b[92m"
+const YELLOW: str = "\x1b[93m"
+const BLUE: str = "\x1b[94m"
+const MAGENTA: str = "\x1b[95m"
+const CYAN: str = "\x1b[96m"
+const WHITE: str = "\x1b[97m"
+const BROWN: str = "\x1b[33m"
+const DGREEN: str = "\x1b[32m"
+const DBLUE: str = "\x1b[34m"
+const DRED: str = "\x1b[31m"
+const GREY: str = "\x1b[37m"
+const BOLD: str = "\x1b[1m"
+const HUSH_BG: str = "\x1b[44m"
+const FX_BG: str = "\x1b[45m"
+
+// ---------------------------------------------------------------- helpers
+
+fn idx(x: i64, y: i64) -> usize { (y * W + x) as usize }
+fn inb(x: i64, y: i64) -> bool { x >= 0 && y >= 0 && x < W && y < H }
+fn iabs(a: i64) -> i64 { if a < 0 { -a } else { a } }
+fn sgn(a: i64) -> i64 { if a > 0 { 1 } else if a < 0 { -1 } else { 0 } }
+fn cheb(ax: i64, ay: i64, bx: i64, by: i64) -> i64 { iabs(ax - bx).max(iabs(ay - by)) }
+
+fn walkable(t: i64) -> bool { t != T_WALL && t != T_CHASM && t != T_BELL }
+fn opaque(t: i64) -> bool { t == T_WALL || t == T_DOOR }
+fn flammable(t: i64) -> bool { t == T_GRASS || t == T_DOOR || t == T_OPEN }
+
+// The eight neighbours, as (dx, dy) by index 0..8.
+fn ndx(d: i64) -> i64 { match d { 0 => 1, 1 => 1, 2 => 0, 3 => -1, 4 => -1, 5 => -1, 6 => 0, _ => 1 } }
+fn ndy(d: i64) -> i64 { match d { 0 => 0, 1 => 1, 2 => 1, 3 => 1, 4 => 0, 5 => -1, 6 => -1, _ => -1 } }
+
+// ---------------------------------------------------------------- syllables
+
+fn syl_name(s: i64) -> str {
+    match s {
+        0 => "ka", 1 => "ra", 2 => "mu", 3 => "su", 4 => "om",
+        5 => "hai", 6 => "vu", 7 => "na", 8 => "sha", 9 => "lo",
+        _ => "?",
+    }
+}
+
+fn syl_meaning(s: i64) -> str {
+    match s {
+        0 => "bolt", 1 => "ring", 2 => "wave", 3 => "seed", 4 => "strike",
+        5 => "flame", 6 => "push", 7 => "still", 8 => "hush", 9 => "lure",
+        _ => "?",
+    }
+}
+
+fn syl_help(s: i64) -> str {
+    match s {
+        0 => "flies straight until it hits something",
+        1 => "touches everything around you",
+        2 => "a cone rolling out in front of you",
+        3 => "bursts at a spot you can see",
+        4 => "wounds (4 per OM)",
+        5 => "sets things alight; fire spreads through grass",
+        6 => "shoves creatures away; walls hurt, chasms kill",
+        7 => "freezes creatures in place for a while",
+        8 => "makes ground silent: no sound crosses it",
+        9 => "a loud false noise that draws listeners",
+        _ => "",
+    }
+}
+
+fn is_form(s: i64) -> bool { s <= S_SU }
+
+fn syl_cost(s: i64) -> i64 {
+    match s { 0 => 1, 1 => 2, 2 => 2, 3 => 2, 4 => 2, 5 => 2, 6 => 1, 7 => 2, 8 => 1, 9 => 1, _ => 99 }
+}
+
+fn mantra_cost(m: &Vec[i64]) -> i64 {
+    let mut c = 0
+    for s in m { c += syl_cost(s) }
+    c
+}
+
+fn mantra_has(m: &Vec[i64], s: i64) -> bool {
+    for x in m { if x == s { return true } }
+    false
+}
+
+fn mantra_count(m: &Vec[i64], s: i64) -> i64 {
+    let mut n = 0
+    for x in m { if x == s { n += 1 } }
+    n
+}
+
+fn mantra_str(m: &Vec[i64]) -> String {
+    let mut out = String::new()
+    for i in 0..m.len() {
+        if i > 0 { out.push(' ') }
+        out.push_str(syl_name(m[i]))
+    }
+    out
+}
+
+fn same_mantra(a: &Vec[i64], b: &Vec[i64]) -> bool {
+    if a.len() != b.len() { return false }
+    for i in 0..a.len() { if a[i] != b[i] { return false } }
+    true
+}
+
+// Split typed text like "kaom" or "ra sha" into syllables. Longest match first.
+fn parse_mantra(text: str) -> Option[Vec[i64]] {
+    let mut out: Vec[i64] = Vec::new()
+    let mut clean = String::new()
+    for c in text.chars() {
+        if c.is_ascii_alphabetic() { clean.push(c.to_ascii_lowercase()) }
+    }
+    let s = clean.as_str()
+    let mut i: usize = 0
+    while i < s.len() {
+        let mut found = -1
+        let mut flen: usize = 0
+        for k in 0..NSYL {
+            let name = syl_name(k)
+            if name.len() > flen && i + name.len() <= s.len() && s.slice(i, i + name.len()) == name {
+                found = k
+                flen = name.len()
+            }
+        }
+        if found < 0 { return None }
+        out.push(found)
+        i += flen
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+// ---------------------------------------------------------------- creatures
+
+fn mon_name(k: i64) -> str {
+    match k {
+        0 => "drowned rat", 1 => "hollow monk", 2 => "wisp", 3 => "listener",
+        4 => "choir shade", 5 => "gong golem", 6 => "Bell Keeper", _ => "thing",
+    }
+}
+
+fn mon_glyph(k: i64) -> str {
+    match k { 0 => "r", 1 => "m", 2 => "w", 3 => "L", 4 => "c", 5 => "G", 6 => "K", _ => "?" }
+}
+
+fn mon_color(k: i64) -> str {
+    match k { 0 => BROWN, 1 => GREY, 2 => YELLOW, 3 => MAGENTA, 4 => CYAN, 5 => RED, 6 => WHITE, _ => WHITE }
+}
+
+fn mon_hp(k: i64) -> i64 { match k { 0 => 3, 1 => 8, 2 => 3, 3 => 11, 4 => 6, 5 => 20, 6 => 34, _ => 5 } }
+// Energy gained per turn; a creature acts once per 10 energy.
+fn mon_speed(k: i64) -> i64 { match k { 0 => 12, 1 => 8, 2 => 18, 3 => 10, 4 => 10, 5 => 6, 6 => 10, _ => 10 } }
+fn mon_sight(k: i64) -> i64 { match k { 0 => 5, 1 => 6, 2 => 7, 3 => 0, 4 => 7, 5 => 5, 6 => 8, _ => 5 } }
+// How far a creature hears, as a percentage of a sound's volume.
+fn mon_hear(k: i64) -> i64 { match k { 0 => 100, 1 => 100, 2 => 60, 3 => 220, 4 => 90, 5 => 80, 6 => 160, _ => 100 } }
+fn mon_dmg_lo(k: i64) -> i64 { match k { 0 => 1, 1 => 2, 2 => 1, 3 => 3, 4 => 1, 5 => 4, 6 => 4, _ => 1 } }
+fn mon_dmg_hi(k: i64) -> i64 { match k { 0 => 2, 1 => 3, 2 => 2, 3 => 5, 4 => 3, 5 => 6, 6 => 6, _ => 2 } }
+
+fn mon_short(k: i64) -> str {
+    match k { 0 => "rat", 1 => "monk", 2 => "wisp", 3 => "listener", 4 => "shade", 5 => "golem", 6 => "KEEPER", _ => "?" }
+}
+
+fn state_short(s: i64) -> str {
+    match s { 0 => "asleep", 1 => "roams", 2 => "seeks", 3 => "HUNTS", 4 => "flees", _ => "?" }
+}
+
+// Break plain text into lines of at most `width` columns, at spaces.
+fn wrap(text: str, width: usize) -> Vec[String] {
+    let mut out: Vec[String] = Vec::new()
+    let mut line = String::new()
+    for w in text.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + w.len() > width {
+            out.push(line.clone())
+            line.clear()
+        }
+        if !line.is_empty() { line.push(' ') }
+        line.push_str(w)
+    }
+    if !line.is_empty() || out.is_empty() { out.push(line) }
+    out
+}
+
+fn state_name(s: i64) -> str {
+    match s { 0 => "asleep", 1 => "wandering", 2 => "searching", 3 => "HUNTING", 4 => "fleeing", _ => "?" }
+}
+
+struct Mon {
+    kind: i64,
+    x: i64,
+    y: i64,
+    hp: i64,
+    maxhp: i64,
+    energy: i64,
+    state: i64,
+    tx: i64,
+    ty: i64,
+    stun: i64,
+    timer: i64,
+    noticed: bool,
+}
+
+struct Room { x: i64, y: i64, w: i64, h: i64 }
+
+enum Act {
+    Move(i64, i64),
+    Rest,
+    Chant(Vec[i64], i64, i64),
+    Herb,
+    Incense,
+    Descend,
+    ToggleSneak,
+    Nothing,
+    Quit,
+}
+
+// ---------------------------------------------------------------- the game
+
+struct Game {
+    rng: u64,
+    depth: i64,
+    turn: i64,
+    tiles: Vec[i64],
+    seen: Vec[bool],
+    vis: Vec[bool],
+    fire: Vec[i64],
+    hush: Vec[i64],
+    items: Vec[i64],
+    fx: Vec[bool],
+    heard: Vec[bool],
+    dist: Vec[i64],
+    stamp: Vec[i64],
+    cur_stamp: i64,
+    queue: Vec[i64],
+    pmap: Vec[i64],
+    mons: Vec[Mon],
+    px: i64,
+    py: i64,
+    hp: i64,
+    maxhp: i64,
+    breath: i64,
+    maxbreath: i64,
+    breath_acc: i64,
+    heal_acc: i64,
+    rested: bool,
+    herbs: i64,
+    incense: i64,
+    shards: i64,
+    kills: i64,
+    chants: i64,
+    known: Vec[bool],
+    learn_order: Vec[i64],
+    learned: i64,
+    sneaking: bool,
+    last_noise: i64,
+    slots: Vec[Vec[i64]],
+    log: Vec[String],
+    msgs: i64,
+    level_turn: i64,
+    vigil_x: i64,
+    vigil_y: i64,
+    roared: bool,
+    prompt: String,
+    over: bool,
+    won: bool,
+    quit: bool,
+    death: String,
+    bot: bool,
+    headless: bool,
+    delay: i64,
+    seed: u64,
+}
+
+fn new_game(seed: u64) -> Game {
+    let n = (W * H) as usize
+    let mut known: Vec[bool] = Vec::new()
+    for _ in 0..NSYL { known.push(false) }
+    known[S_KA as usize] = true
+    known[S_OM as usize] = true
+    known[S_VU as usize] = true
+    let mut g = Game {
+        rng: seed ^ 0x9E3779B97F4A7C15,
+        depth: 1,
+        turn: 0,
+        tiles: [T_WALL; n],
+        seen: [false; n],
+        vis: [false; n],
+        fire: [0; n],
+        hush: [0; n],
+        items: [I_NONE; n],
+        fx: [false; n],
+        heard: [false; n],
+        dist: [0; n],
+        stamp: [0; n],
+        cur_stamp: 0,
+        queue: Vec::with_capacity(n),
+        pmap: [0; n],
+        mons: Vec::new(),
+        px: 0,
+        py: 0,
+        hp: 20,
+        maxhp: 20,
+        breath: 10,
+        maxbreath: 10,
+        breath_acc: 0,
+        heal_acc: 0,
+        rested: false,
+        herbs: 1,
+        incense: 0,
+        shards: 0,
+        kills: 0,
+        chants: 0,
+        known,
+        learn_order: Vec::new(),
+        learned: 0,
+        sneaking: false,
+        last_noise: 0,
+        slots: Vec::new(),
+        log: Vec::new(),
+        msgs: 0,
+        level_turn: 0,
+        vigil_x: 0,
+        vigil_y: 0,
+        roared: false,
+        prompt: String::new(),
+        over: false,
+        won: false,
+        quit: false,
+        death: String::new(),
+        bot: false,
+        headless: false,
+        delay: 0,
+        seed,
+    }
+    if g.rng == 0 { g.rng = 1 }
+    for _ in 0..4 { let _ = g.rand() }
+    // The order in which tablets teach the remaining syllables. Hush and lure
+    // come early because they are what make the stealth game work.
+    let mut rest: Vec[i64] = [S_RA, S_MU, S_SU, S_HAI, S_NA]
+    let mut i = rest.len()
+    while i > 1 {
+        let j = g.rn(i as i64) as usize
+        rest.swap(i - 1, j)
+        i -= 1
+    }
+    g.learn_order = [S_SHA, S_LO]
+    g.learn_order.append(&mut rest)
+    let a = g.learn_order[0]
+    let b = g.learn_order[1]
+    if g.rn(2) == 0 { g.learn_order.swap(0, 1) }
+    let _ = a + b
+    g.slots.push([S_KA, S_OM])
+    g.slots.push([S_KA, S_VU])
+    g
+}
+
+impl Game {
+    // ---------------- randomness (xorshift64*)
+
+    fn rand(&mut self) -> u64 {
+        let mut x = self.rng
+        x ^= x >> 12
+        x ^= x << 25
+        x ^= x >> 27
+        self.rng = x
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn rn(&mut self, n: i64) -> i64 {
+        if n <= 0 { return 0 }
+        ((self.rand() >> 11) % (n as u64)) as i64
+    }
+    fn range(&mut self, lo: i64, hi: i64) -> i64 { lo + self.rn(hi - lo + 1) }
+    fn chance(&mut self, pct: i64) -> bool { self.rn(100) < pct }
+
+    // ---------------- messages
+
+    fn say(&mut self, s: str) {
+        self.msgs += 1
+        if self.headless { return }
+        if !self.log.is_empty() && self.log[self.log.len() - 1].as_str() == s { return }
+        self.log.push(s.to_string())
+        if self.log.len() > 40 { let _ = self.log.remove(0) }
+    }
+
+    // ---------------- map access
+
+    fn t(&self, x: i64, y: i64) -> i64 { if inb(x, y) { self.tiles[idx(x, y)] } else { T_WALL } }
+    fn set_t(&mut self, x: i64, y: i64, t: i64) { if inb(x, y) { self.tiles[idx(x, y)] = t } }
+
+    fn mon_at(&self, x: i64, y: i64) -> i64 {
+        for i in 0..self.mons.len() {
+            let m = self.mons[i]
+            if m.hp > 0 && m.x == x && m.y == y { return i as i64 }
+        }
+        -1
+    }
+
+    fn free(&self, x: i64, y: i64) -> bool {
+        inb(x, y) && walkable(self.t(x, y)) && self.mon_at(x, y) < 0 && !(x == self.px && y == self.py)
+    }
+
+    // ---------------- level generation
+
+    fn gen_level(&mut self) {
+        let mut tries = 0
+        loop {
+            tries += 1
+            if self.try_gen() { break }
+            if tries > 200 { panic("could not generate a level") }
+        }
+        self.compute_fov()
+    }
+
+    fn carve(&mut self, x: i64, y: i64) {
+        if x > 0 && y > 0 && x < W - 1 && y < H - 1 && self.t(x, y) == T_WALL { self.set_t(x, y, T_FLOOR) }
+    }
+
+    fn corridor(&mut self, ax: i64, ay: i64, bx: i64, by: i64) {
+        let horizontal_first = self.rn(2) == 0
+        let mut x = ax
+        let mut y = ay
+        if horizontal_first {
+            while x != bx { self.carve(x, y); x += sgn(bx - x) }
+            while y != by { self.carve(x, y); y += sgn(by - y) }
+        } else {
+            while y != by { self.carve(x, y); y += sgn(by - y) }
+            while x != bx { self.carve(x, y); x += sgn(bx - x) }
+        }
+        self.carve(x, y)
+    }
+
+    // A random walk that turns floor into `t`, staying inside the box.
+    fn blob(&mut self, cx: i64, cy: i64, steps: i64, t: i64, x0: i64, y0: i64, x1: i64, y1: i64) {
+        let mut x = cx
+        let mut y = cy
+        for _ in 0..steps {
+            if x >= x0 && x <= x1 && y >= y0 && y <= y1 && self.t(x, y) == T_FLOOR { self.set_t(x, y, t) }
+            let d = self.rn(4) * 2
+            let nx = x + ndx(d)
+            let ny = y + ndy(d)
+            if nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1 { x = nx; y = ny }
+        }
+    }
+
+    fn random_floor(&mut self) -> (i64, i64) {
+        loop {
+            let x = self.range(1, W - 2)
+            let y = self.range(1, H - 2)
+            if self.t(x, y) == T_FLOOR && self.items[idx(x, y)] == I_NONE && self.mon_at(x, y) < 0 { return (x, y) }
+        }
+    }
+
+    fn try_gen(&mut self) -> bool {
+        let n = (W * H) as usize
+        for i in 0..n {
+            self.tiles[i] = T_WALL
+            self.seen[i] = false
+            self.vis[i] = false
+            self.fire[i] = 0
+            self.hush[i] = 0
+            self.items[i] = I_NONE
+        }
+        self.mons.clear()
+        let mut rooms: Vec[Room] = Vec::new()
+        let mut tries = 0
+        while tries < 300 && rooms.len() < 11 {
+            tries += 1
+            let w = self.range(4, 12)
+            let h = self.range(3, 6)
+            let x = self.range(1, W - w - 1)
+            let y = self.range(1, H - h - 1)
+            let mut ok = true
+            for r in &rooms {
+                if x <= r.x + r.w + 1 && r.x <= x + w + 1 && y <= r.y + r.h + 1 && r.y <= y + h + 1 { ok = false }
+            }
+            if ok { rooms.push(Room { x, y, w, h }) }
+        }
+        if rooms.len() < 6 { return false }
+        // Sort by x so neighbouring rooms connect with short corridors.
+        let mut i: usize = 1
+        while i < rooms.len() {
+            let mut j = i
+            while j > 0 && rooms[j - 1].x > rooms[j].x {
+                rooms.swap(j - 1, j)
+                j -= 1
+            }
+            i += 1
+        }
+        for r in &rooms {
+            for yy in r.y..r.y + r.h {
+                for xx in r.x..r.x + r.w { self.set_t(xx, yy, T_FLOOR) }
+            }
+        }
+        for k in 1..rooms.len() {
+            let a = rooms[k - 1]
+            let b = rooms[k]
+            self.corridor(a.x + a.w / 2, a.y + a.h / 2, b.x + b.w / 2, b.y + b.h / 2)
+        }
+        let extra = self.range(2, 4)
+        for _ in 0..extra {
+            let a = rooms[self.rn(rooms.len() as i64) as usize]
+            let b = rooms[self.rn(rooms.len() as i64) as usize]
+            self.corridor(a.x + self.rn(a.w), a.y + self.rn(a.h), b.x + self.rn(b.w), b.y + self.rn(b.h))
+        }
+        // Doors where a corridor meets a room wall.
+        for r in &rooms {
+            for yy in r.y - 1..r.y + r.h + 1 {
+                for xx in r.x - 1..r.x + r.w + 1 {
+                    let edge = yy == r.y - 1 || yy == r.y + r.h || xx == r.x - 1 || xx == r.x + r.w
+                    if !edge || self.t(xx, yy) != T_FLOOR { continue }
+                    let ns = self.t(xx, yy - 1) == T_WALL && self.t(xx, yy + 1) == T_WALL
+                    let ew = self.t(xx - 1, yy) == T_WALL && self.t(xx + 1, yy) == T_WALL
+                    if (ns || ew) && self.chance(55) { self.set_t(xx, yy, T_DOOR) }
+                }
+            }
+        }
+        // Grass, water and chasms. Deeper levels are wetter and more broken.
+        let grass = self.range(3, 5)
+        for _ in 0..grass {
+            let r = rooms[self.rn(rooms.len() as i64) as usize]
+            let steps = self.range(25, 60)
+            self.blob(r.x + self.rn(r.w), r.y + self.rn(r.h), steps, T_GRASS, 1, 1, W - 2, H - 2)
+        }
+        let water = self.range(0, 1) + self.depth / 2
+        for _ in 0..water {
+            let r = rooms[self.rn(rooms.len() as i64) as usize]
+            let steps = self.range(15, 40)
+            self.blob(r.x + self.rn(r.w), r.y + self.rn(r.h), steps, T_WATER, r.x, r.y, r.x + r.w - 1, r.y + r.h - 1)
+        }
+        if self.depth >= 2 {
+            let chasms = self.range(1, 2)
+            for _ in 0..chasms {
+                let r = rooms[self.rn(rooms.len() as i64) as usize]
+                if r.w >= 6 && r.h >= 4 {
+                    let steps = self.range(10, 25)
+                    self.blob(r.x + r.w / 2, r.y + r.h / 2, steps, T_CHASM, r.x + 1, r.y + 1, r.x + r.w - 2, r.y + r.h - 2)
+                }
+            }
+        }
+        // Start in the first room; everything must be reachable from there.
+        let s = rooms[0]
+        self.px = s.x + s.w / 2
+        self.py = s.y + s.h / 2
+        self.set_t(self.px, self.py, T_FLOOR)
+        self.bfs(self.px, self.py, -1, false)
+        let mut far = 0
+        let mut fx = -1
+        let mut fy = -1
+        let mut reach = 0
+        let mut total = 0
+        for y in 0..H {
+            for x in 0..W {
+                let t = self.t(x, y)
+                if !walkable(t) { continue }
+                total += 1
+                let d = self.d(x, y)
+                if d < 0 { continue }
+                reach += 1
+                if t == T_FLOOR && d > far { far = d; fx = x; fy = y }
+            }
+        }
+        if reach * 100 < total * 97 || far < 25 { return false }
+        // Seal anything unreachable.
+        for y in 0..H {
+            for x in 0..W {
+                if walkable(self.t(x, y)) && self.d(x, y) < 0 { self.set_t(x, y, T_WALL) }
+            }
+        }
+        if self.depth == MAX_DEPTH {
+            self.set_t(fx, fy, T_BELL)
+            // The Keeper stands its vigil beside the bell.
+            let mut placed = false
+            for d in 0..8 {
+                let kx = fx + ndx(d)
+                let ky = fy + ndy(d)
+                if !placed && self.t(kx, ky) == T_FLOOR {
+                    self.spawn(M_KEEPER, kx, ky)
+                    let last = self.mons.len() - 1
+                    self.mons[last].state = ST_SEARCH
+                    self.mons[last].tx = kx
+                    self.mons[last].ty = ky
+                    self.mons[last].timer = 1000000
+                    self.vigil_x = kx
+                    self.vigil_y = ky
+                    placed = true
+                }
+            }
+            if !placed { return false }
+        } else {
+            self.set_t(fx, fy, T_STAIRS)
+        }
+        // Items.
+        let herbs = self.range(0, 2)
+        for _ in 0..herbs { self.drop_item(I_HERB) }
+        if self.learned < self.learn_order.len() as i64 {
+            self.drop_item(I_TABLET)
+            if self.depth >= 2 && self.learned + 1 < self.learn_order.len() as i64 { self.drop_item(I_TABLET) }
+        }
+        self.drop_item(I_SHARD)
+        if self.chance(45) { self.drop_item(I_INCENSE) }
+        // Creatures, kept away from the stairs you arrived by.
+        let count = 5 + self.depth * 2
+        let mut placed = 0
+        let mut guard = 0
+        while placed < count && guard < 500 {
+            guard += 1
+            let (x, y) = self.random_floor()
+            if self.d(x, y) < 9 { continue }
+            let k = self.pick_kind()
+            self.spawn(k, x, y)
+            placed += 1
+            if k == M_RAT {
+                for _ in 0..self.range(1, 2) {
+                    let d = self.rn(8)
+                    if self.free(x + ndx(d), y + ndy(d)) { self.spawn(M_RAT, x + ndx(d), y + ndy(d)) }
+                }
+            }
+        }
+        true
+    }
+
+    fn drop_item(&mut self, it: i64) {
+        let (x, y) = self.random_floor()
+        self.items[idx(x, y)] = it
+    }
+
+    fn pick_kind(&mut self) -> i64 {
+        let d = self.depth
+        loop {
+            let r = self.rn(100)
+            let k = if r < 22 { M_RAT } else if r < 50 { M_MONK } else if r < 62 { M_WISP } else if r < 78 { M_LISTENER } else if r < 92 { M_SHADE } else { M_GOLEM }
+            let ok = match k {
+                0 => d <= 4,
+                1 => true,
+                2 => d >= 2,
+                3 => d >= 2,
+                4 => d >= 3,
+                5 => d >= 4,
+                _ => false,
+            }
+            if ok { return k }
+        }
+    }
+
+    fn spawn(&mut self, k: i64, x: i64, y: i64) {
+        let hp = mon_hp(k) + if k != M_KEEPER { (self.depth - 1) / 2 } else { 0 }
+        let asleep = k != M_KEEPER && self.chance(if k == M_LISTENER { 30 } else { 60 })
+        let e = self.rn(10)
+        self.mons.push(Mon {
+            kind: k, x, y, hp, maxhp: hp, energy: e,
+            state: if asleep { ST_ASLEEP } else { ST_WANDER },
+            tx: x, ty: y, stun: 0, timer: 0, noticed: false,
+        })
+    }
+
+    // ---------------- flood fills
+
+    fn d(&self, x: i64, y: i64) -> i64 {
+        let i = idx(x, y)
+        if self.stamp[i] == self.cur_stamp { self.dist[i] } else { -1 }
+    }
+
+    fn passable_for(&self, x: i64, y: i64, known_only: bool) -> bool {
+        let t = self.t(x, y)
+        if !walkable(t) { return false }
+        if known_only && !self.seen[idx(x, y)] { return false }
+        true
+    }
+
+    // Breadth-first distances from (sx, sy) over walkable tiles, into `dist`.
+    // Stops early once tile `goal` is reached (pass -1 to fill everything).
+    fn bfs(&mut self, sx: i64, sy: i64, goal: i64, known_only: bool) {
+        self.cur_stamp += 1
+        let st = self.cur_stamp
+        self.queue.clear()
+        let s = idx(sx, sy)
+        self.stamp[s] = st
+        self.dist[s] = 0
+        self.queue.push(s as i64)
+        let mut head: usize = 0
+        while head < self.queue.len() {
+            let c = self.queue[head]
+            head += 1
+            if c == goal { return }
+            let cx = c % W
+            let cy = c / W
+            let cd = self.dist[c as usize]
+            for d in 0..8 {
+                let nx = cx + ndx(d)
+                let ny = cy + ndy(d)
+                if !inb(nx, ny) { continue }
+                let ni = idx(nx, ny)
+                if self.stamp[ni] == st { continue }
+                if !self.passable_for(nx, ny, known_only) { continue }
+                if !known_only && self.fire[ni] > 0 && ni as i64 != goal { continue }
+                self.stamp[ni] = st
+                self.dist[ni] = cd + 1
+                self.queue.push(ni as i64)
+            }
+        }
+    }
+
+    // How far a sound travels: closed doors cost 4 steps, hushed ground stops it.
+    fn noise_flood(&mut self, sx: i64, sy: i64, maxd: i64) {
+        self.cur_stamp += 1
+        let st = self.cur_stamp
+        self.queue.clear()
+        let s = idx(sx, sy)
+        self.stamp[s] = st
+        self.dist[s] = 0
+        self.queue.push(s as i64)
+        let mut head: usize = 0
+        while head < self.queue.len() {
+            let c = self.queue[head]
+            head += 1
+            let cx = c % W
+            let cy = c / W
+            let cd = self.dist[c as usize]
+            if cd >= maxd { continue }
+            for d in 0..8 {
+                let nx = cx + ndx(d)
+                let ny = cy + ndy(d)
+                if !inb(nx, ny) { continue }
+                let t = self.t(nx, ny)
+                if t == T_WALL || t == T_BELL { continue }
+                let ni = idx(nx, ny)
+                if self.hush[ni] > 0 { continue }
+                let nd = cd + if t == T_DOOR { 4 } else { 1 }
+                if self.stamp[ni] == st && self.dist[ni] <= nd { continue }
+                self.stamp[ni] = st
+                self.dist[ni] = nd
+                self.queue.push(ni as i64)
+            }
+        }
+    }
+
+    // ---------------- sight
+
+    fn compute_fov(&mut self) {
+        let n = (W * H) as usize
+        for i in 0..n { self.vis[i] = false }
+        let pi = idx(self.px, self.py)
+        self.vis[pi] = true
+        self.seen[pi] = true
+        let xx: Vec[i64] = [1, 0, 0, -1, -1, 0, 0, 1]
+        let xy: Vec[i64] = [0, 1, -1, 0, 0, -1, 1, 0]
+        let yx: Vec[i64] = [0, 1, 1, 0, 0, -1, -1, 0]
+        let yy: Vec[i64] = [1, 0, 0, 1, -1, 0, 0, -1]
+        for o in 0usize..8 {
+            self.cast_light(1, 1.0, 0.0, xx[o], xy[o], yx[o], yy[o])
+        }
+    }
+
+    // Recursive shadowcasting over one octant.
+    fn cast_light(&mut self, row: i64, start_in: f64, end: f64, xx: i64, xy: i64, yx: i64, yy: i64) {
+        if start_in < end { return }
+        let mut start = start_in
+        let mut new_start = 0.0
+        let r2 = VIEW_R * VIEW_R + VIEW_R
+        let mut j = row
+        while j <= VIEW_R {
+            let dy = -j
+            let mut dx = -j - 1
+            let mut blocked = false
+            while dx <= 0 {
+                dx += 1
+                let mx = self.px + dx * xx + dy * xy
+                let my = self.py + dx * yx + dy * yy
+                let l_slope = (dx as f64 - 0.5) / (dy as f64 + 0.5)
+                let r_slope = (dx as f64 + 0.5) / (dy as f64 - 0.5)
+                if start < r_slope { continue }
+                if end > l_slope { break }
+                let in_map = inb(mx, my)
+                if in_map && dx * dx + dy * dy <= r2 {
+                    let i = idx(mx, my)
+                    self.vis[i] = true
+                    self.seen[i] = true
+                }
+                let op = !in_map || opaque(self.t(mx, my))
+                if blocked {
+                    if op {
+                        new_start = r_slope
+                    } else {
+                        blocked = false
+                        start = new_start
+                    }
+                } else if op && j < VIEW_R {
+                    blocked = true
+                    self.cast_light(j + 1, start, l_slope, xx, xy, yx, yy)
+                    new_start = r_slope
+                }
+            }
+            if blocked { break }
+            j += 1
+        }
+    }
+
+    // Straight line visibility between two points (Bresenham).
+    fn los(&self, ax: i64, ay: i64, bx: i64, by: i64) -> bool {
+        let dx = iabs(bx - ax)
+        let dy = -iabs(by - ay)
+        let sx = sgn(bx - ax)
+        let sy = sgn(by - ay)
+        let mut err = dx + dy
+        let mut x = ax
+        let mut y = ay
+        loop {
+            if x == bx && y == by { return true }
+            if !(x == ax && y == ay) && opaque(self.t(x, y)) { return false }
+            let e2 = 2 * err
+            if e2 >= dy { err += dy; x += sx }
+            if e2 <= dx { err += dx; y += sy }
+        }
+    }
+
+    // The tiles a line from (ax, ay) towards (bx, by) passes over, continuing
+    // past the target, up to `len` steps.
+    fn ray(&self, ax: i64, ay: i64, bx: i64, by: i64, len: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec::new()
+        let dx = iabs(bx - ax)
+        let dy = -iabs(by - ay)
+        let sx = sgn(bx - ax)
+        let sy = sgn(by - ay)
+        if sx == 0 && sy == 0 { return out }
+        let mut err = dx + dy
+        let mut x = ax
+        let mut y = ay
+        while (out.len() as i64) < len {
+            let e2 = 2 * err
+            if e2 >= dy { err += dy; x += sx }
+            if e2 <= dx { err += dx; y += sy }
+            if !inb(x, y) { break }
+            out.push(idx(x, y) as i64)
+        }
+        out
+    }
+
+    fn player_hidden(&self) -> bool { self.t(self.px, self.py) == T_GRASS }
+
+    // Can creature `m` see the player right now?
+    fn sees_player(&self, m: Mon) -> bool {
+        if m.state == ST_ASLEEP { return false }
+        let d = cheb(m.x, m.y, self.px, self.py)
+        if m.kind == M_LISTENER { return d <= 1 }
+        let mut sight = mon_sight(m.kind)
+        if self.sneaking && m.state != ST_HUNT { sight = sight / 2 }
+        if d > sight { return false }
+        if self.player_hidden() && d > 2 { return false }
+        self.los(m.x, m.y, self.px, self.py)
+    }
+
+    // Can the player see creature `m`?
+    fn shows(&self, m: Mon) -> bool {
+        if !self.vis[idx(m.x, m.y)] { return false }
+        !(self.t(m.x, m.y) == T_GRASS && cheb(m.x, m.y, self.px, self.py) > 2)
+    }
+
+    // ---------------- sound
+
+    fn noise(&mut self, x: i64, y: i64, vol: i64, from_player: bool) {
+        if vol <= 0 || self.hush[idx(x, y)] > 0 { return }
+        if from_player { self.last_noise = self.last_noise.max(vol) }
+        self.noise_flood(x, y, vol * 23 / 10)
+        if from_player && !self.headless {
+            // Remember how far an ordinary ear would hear it, to draw the ripple.
+            for i in 0..(W * H) as usize {
+                if self.stamp[i] == self.cur_stamp && self.dist[i] <= vol { self.heard[i] = true }
+            }
+        }
+        for i in 0..self.mons.len() {
+            let m = self.mons[i]
+            if m.hp <= 0 || m.kind == M_WISP && m.state == ST_HUNT { continue }
+            let d = self.d(m.x, m.y)
+            if d < 0 { continue }
+            let mut reach = vol * mon_hear(m.kind) / 100
+            if m.state == ST_ASLEEP { reach = reach / 2 }
+            if d > reach { continue }
+            if m.state == ST_HUNT && self.sees_player(m) { continue }
+            if m.state == ST_ASLEEP && self.vis[idx(m.x, m.y)] { self.say("The {mon_name(m.kind)} stirs.") }
+            if m.kind == M_LISTENER && m.state != ST_HUNT && from_player && self.vis[idx(m.x, m.y)] {
+                self.say("The listener turns its blind face toward the sound.")
+            }
+            self.mons[i].state = if m.kind == M_LISTENER || m.kind == M_KEEPER && from_player { ST_HUNT } else { ST_SEARCH }
+            self.mons[i].tx = x
+            self.mons[i].ty = y
+            self.mons[i].timer = if m.kind == M_KEEPER { 12 } else { 6 + self.rn(6) }
+        }
+    }
+
+    // ---------------- the player
+
+    fn move_player(&mut self, dx: i64, dy: i64) -> i64 {
+        let nx = self.px + dx
+        let ny = self.py + dy
+        if !inb(nx, ny) { return 0 }
+        let m = self.mon_at(nx, ny)
+        if m >= 0 {
+            self.melee(m as usize)
+            return 1
+        }
+        let t = self.t(nx, ny)
+        if t == T_BELL {
+            self.ring_bell()
+            return 1
+        }
+        if t == T_WALL { return 0 }
+        if t == T_CHASM {
+            self.say("The chasm drops away into darkness. You step back.")
+            return 0
+        }
+        if t == T_DOOR {
+            self.set_t(nx, ny, T_OPEN)
+            self.noise(self.px, self.py, if self.sneaking { 1 } else { 3 }, true)
+            return 1
+        }
+        self.px = nx
+        self.py = ny
+        let mut vol = if self.sneaking { 0 } else { 2 }
+        if t == T_WATER { vol += 3; self.say("Water splashes around your feet.") }
+        if t == T_ASH { vol += 1 }
+        self.noise(nx, ny, vol, true)
+        self.pick_up()
+        if self.sneaking { 2 } else { 1 }
+    }
+
+    fn pick_up(&mut self) {
+        let i = idx(self.px, self.py)
+        let it = self.items[i]
+        if it == I_NONE { return }
+        self.items[i] = I_NONE
+        if it == I_HERB {
+            self.herbs += 1
+            self.say("You gather a bitter herb. (q to eat)")
+        } else if it == I_INCENSE {
+            self.incense += 1
+            self.say("You find a stick of temple incense. (e to burn)")
+        } else if it == I_SHARD {
+            self.shards += 1
+            self.maxbreath += 2
+            self.breath += 2
+            if self.shards % 2 == 0 {
+                self.say("A bell shard hums in your hand. Your breath deepens, and your mantras may grow longer.")
+            } else {
+                self.say("A bell shard hums in your hand. Your breath deepens.")
+            }
+        } else if it == I_TABLET {
+            if self.learned < self.learn_order.len() as i64 {
+                let s = self.learn_order[self.learned as usize]
+                self.learned += 1
+                self.known[s as usize] = true
+                self.say("A carved tablet teaches you the syllable {syl_name(s).to_uppercase()}: {syl_meaning(s)}, {syl_help(s)}.")
+            } else {
+                self.say("The tablet's words are ones you already know.")
+            }
+        }
+    }
+
+    fn max_syllables(&self) -> i64 { 3 + self.shards / 2 }
+
+    fn melee(&mut self, i: usize) {
+        let m = self.mons[i]
+        let mut dmg = self.range(2, 4) + self.depth / 3
+        if m.state == ST_ASLEEP || m.stun > 0 {
+            dmg = dmg * 3
+            self.say("You catch the {mon_name(m.kind)} helpless ({dmg}).")
+        } else if m.state != ST_HUNT {
+            dmg = dmg * 2
+            self.say("You catch the {mon_name(m.kind)} unawares ({dmg}).")
+        } else {
+            self.say("You strike the {mon_name(m.kind)} ({dmg}).")
+        }
+        self.hurt(i, dmg, true)
+        self.noise(self.px, self.py, 4, true)
+    }
+
+    fn hurt(&mut self, i: usize, dmg: i64, by_player: bool) {
+        if self.mons[i].hp <= 0 { return }
+        self.mons[i].hp -= dmg
+        let m = self.mons[i]
+        if m.hp <= 0 {
+            if self.vis[idx(m.x, m.y)] {
+                if m.kind == M_KEEPER {
+                    self.say("The Bell Keeper falls, and the silence afterward is enormous.")
+                } else {
+                    self.say("The {mon_name(m.kind)} is destroyed.")
+                }
+            }
+            if by_player { self.kills += 1 }
+            self.noise(m.x, m.y, 3, false)
+            return
+        }
+        if m.state == ST_ASLEEP || m.state == ST_WANDER || m.state == ST_SEARCH {
+            self.mons[i].state = ST_HUNT
+            self.mons[i].tx = self.px
+            self.mons[i].ty = self.py
+        }
+        if (m.kind == M_RAT || m.kind == M_WISP || m.kind == M_SHADE) && m.hp * 3 <= m.maxhp {
+            self.mons[i].state = ST_FLEE
+        }
+        if m.kind == M_KEEPER && m.hp * 2 <= m.maxhp && !self.roared {
+            self.roared = true
+            self.say("The Bell Keeper ROARS. Every sleeper in the deep hears it.")
+            self.noise(m.x, m.y, 40, false)
+        }
+    }
+
+    fn hurt_player(&mut self, dmg: i64, cause: str) {
+        if self.over { return }
+        self.hp -= dmg
+        if self.hp <= 0 {
+            self.hp = 0
+            self.over = true
+            self.death = cause.to_string()
+        }
+    }
+
+    fn ring_bell(&mut self) {
+        self.say("You strike the Hollow Bell. Its voice rolls up through the mountain.")
+        self.won = true
+        self.over = true
+    }
+
+    fn descend(&mut self) -> i64 {
+        if self.t(self.px, self.py) != T_STAIRS {
+            self.say("There are no stairs here.")
+            return 0
+        }
+        self.depth += 1
+        self.level_turn = 0
+        self.gen_level()
+        if self.depth == MAX_DEPTH {
+            self.say("Depth {self.depth}. Somewhere ahead, something enormous is breathing beside the Hollow Bell.")
+        } else {
+            self.say("You descend to depth {self.depth}. The air is colder.")
+        }
+        1
+    }
+
+    fn eat_herb(&mut self) -> i64 {
+        if self.herbs <= 0 { self.say("You have no herbs."); return 0 }
+        self.herbs -= 1
+        self.hp = (self.hp + 10).min(self.maxhp)
+        self.breath = (self.breath + 2).min(self.maxbreath)
+        self.say("You chew a bitter herb. Warmth spreads through you.")
+        1
+    }
+
+    fn burn_incense(&mut self) -> i64 {
+        if self.incense <= 0 { self.say("You have no incense."); return 0 }
+        self.incense -= 1
+        for y in 0..H {
+            for x in 0..W {
+                if self.t(x, y) == T_WALL {
+                    let mut near = false
+                    for d in 0..8 { if inb(x + ndx(d), y + ndy(d)) && walkable(self.t(x + ndx(d), y + ndy(d))) { near = true } }
+                    if near { self.seen[idx(x, y)] = true }
+                } else {
+                    self.seen[idx(x, y)] = true
+                }
+            }
+        }
+        self.say("Sweet smoke drifts through the halls, and their shape comes to you.")
+        1
+    }
+
+    // ---------------- mantras
+
+    fn check_mantra(&mut self, m: &Vec[i64]) -> bool {
+        if m.len() < 2 {
+            self.say("A mantra needs a form (ka ra mu su) followed by a force (om hai vu na sha lo).")
+            return false
+        }
+        if !is_form(m[0]) {
+            self.say("A mantra must begin with a form: ka, ra, mu or su.")
+            return false
+        }
+        for k in 1..m.len() {
+            if is_form(m[k]) {
+                self.say("Only the first syllable may be a form.")
+                return false
+            }
+        }
+        for s in m {
+            if !self.known[s as usize] {
+                self.say("You do not know the syllable {syl_name(s).to_uppercase()} yet.")
+                return false
+            }
+        }
+        if m.len() as i64 > self.max_syllables() {
+            self.say("You cannot hold more than {self.max_syllables()} syllables in one breath yet.")
+            return false
+        }
+        let c = mantra_cost(m)
+        if c > self.breath {
+            self.say("That mantra needs {c} breath; you have {self.breath}.")
+            return false
+        }
+        true
+    }
+
+    // Speak a mantra aimed at (ax, ay). Returns the time it took (0 if it failed).
+    fn chant(&mut self, m: &Vec[i64], ax: i64, ay: i64) -> i64 {
+        if !self.check_mantra(m) { return 0 }
+        let form = m[0]
+        if form != S_RA && ax == self.px && ay == self.py {
+            self.say("You need somewhere to aim it.")
+            return 0
+        }
+        self.breath -= mantra_cost(m)
+        self.chants += 1
+        self.remember(m)
+        // Where it lands: a list of tiles, a centre for lures, and a push origin.
+        let mut area: Vec[i64] = Vec::new()
+        let mut cx = self.px
+        let mut cy = self.py
+        let mut ox = self.px
+        let mut oy = self.py
+        if form == S_KA {
+            let path = self.ray(self.px, self.py, ax, ay, 10)
+            let mut last = -1
+            for c in &path {
+                let x = c % W
+                let y = c / W
+                let t = self.t(x, y)
+                if t == T_WALL || t == T_DOOR || t == T_BELL {
+                    if t == T_DOOR && mantra_has(m, S_VU) { last = c }
+                    break
+                }
+                last = c
+                self.flash(c)
+                if self.mon_at(x, y) >= 0 { break }
+            }
+            if last >= 0 {
+                area.push(last)
+                cx = last % W
+                cy = last / W
+            }
+        } else if form == S_RA {
+            for dy in -2..3 {
+                for dx in -2..3 {
+                    let x = self.px + dx
+                    let y = self.py + dy
+                    if dx * dx + dy * dy > 5 || !inb(x, y) { continue }
+                    if dx == 0 && dy == 0 && !mantra_has(m, S_SHA) { continue }
+                    if self.t(x, y) == T_WALL || !self.los(self.px, self.py, x, y) { continue }
+                    area.push(idx(x, y) as i64)
+                }
+            }
+        } else if form == S_MU {
+            let vx = (ax - self.px) as f64
+            let vy = (ay - self.py) as f64
+            let vl = (vx * vx + vy * vy).sqrt()
+            let mut far = 0.0
+            for dy in -5..6 {
+                for dx in -5..6 {
+                    let x = self.px + dx
+                    let y = self.py + dy
+                    if !inb(x, y) || (dx == 0 && dy == 0) { continue }
+                    let l = ((dx * dx + dy * dy) as f64).sqrt()
+                    if l > 5.0 { continue }
+                    let cosang = (vx * dx as f64 + vy * dy as f64) / (vl * l)
+                    if cosang < 0.8 { continue }
+                    if self.t(x, y) == T_WALL || !self.vis[idx(x, y)] || !self.los(self.px, self.py, x, y) { continue }
+                    area.push(idx(x, y) as i64)
+                    if l > far { far = l; cx = x; cy = y }
+                }
+            }
+        } else {
+            // SU: lands at the target if it can be seen and is close enough,
+            // otherwise where the throw is stopped.
+            let path = self.ray(self.px, self.py, ax, ay, 8)
+            let mut land = idx(self.px, self.py) as i64
+            for c in &path {
+                let x = c % W
+                let y = c / W
+                if opaque(self.t(x, y)) || self.t(x, y) == T_BELL { break }
+                land = c
+                if x == ax && y == ay || self.mon_at(x, y) >= 0 { break }
+            }
+            cx = land % W
+            cy = land / W
+            ox = cx
+            oy = cy
+            for dy in -1..2 {
+                for dx in -1..2 {
+                    let x = cx + dx
+                    let y = cy + dy
+                    if inb(x, y) && self.t(x, y) != T_WALL { area.push(idx(x, y) as i64) }
+                }
+            }
+        }
+        // Chanting is loud, unless the mantra hushes itself.
+        let loud = if mantra_has(m, S_SHA) { 1 } else { 3 + 2 * m.len() as i64 }
+        for c in &area { self.flash(c) }
+        self.show_fx()
+        if area.is_empty() {
+            self.say("Your mantra \"{mantra_str(m)}\" fades into stone.")
+            self.noise(self.px, self.py, loud, true)
+            return 1
+        }
+        self.say("You chant \"{mantra_str(m)}\".")
+        // Hush first, so the noise of the chant itself can be swallowed.
+        let sha = mantra_count(m, S_SHA)
+        if sha > 0 {
+            for c in &area { self.hush[c as usize] = self.hush[c as usize].max(12 * sha) }
+            self.say("Silence settles like snow.")
+        }
+        let om = mantra_count(m, S_OM)
+        let hai = mantra_count(m, S_HAI)
+        let vu = mantra_count(m, S_VU)
+        let na = mantra_count(m, S_NA)
+        let lo = mantra_count(m, S_LO)
+        for c in &area {
+            let x = c % W
+            let y = c / W
+            let mi = self.mon_at(x, y)
+            if mi >= 0 {
+                let i = mi as usize
+                let k = self.mons[i].kind
+                if om > 0 { self.hurt(i, 4 * om, true) }
+                if hai > 0 && k != M_WISP && self.mons[i].hp > 0 { self.hurt(i, 2 * hai, true) }
+                if na > 0 && self.mons[i].hp > 0 {
+                    self.mons[i].stun = self.mons[i].stun.max(3 + 2 * na)
+                    if self.vis[c as usize] { self.say("The {mon_name(k)} freezes, held by stillness.") }
+                }
+            }
+            if hai > 0 { self.ignite(x, y, 2 + 2 * hai) }
+        }
+        if vu > 0 {
+            // Push the farthest creatures first so they do not block each other.
+            // (Tuples are not `Ord` yet, so pack distance and index into one number.)
+            let mut order: Vec[i64] = Vec::new()
+            for c in &area {
+                let mi = self.mon_at(c % W, c / W)
+                if mi >= 0 { order.push(cheb(c % W, c / W, ox, oy) * 1000 + mi) }
+            }
+            order.sort()
+            let mut k = order.len()
+            while k > 0 {
+                k -= 1
+                let mi = order[k] % 1000
+                self.push_mon(mi as usize, ox, oy, 2 * vu, ax, ay, form)
+            }
+            for c in &area {
+                if self.t(c % W, c / W) == T_DOOR {
+                    self.set_t(c % W, c / W, T_FLOOR)
+                    self.say("The door bursts from its hinges.")
+                    self.noise(c % W, c / W, 6, false)
+                }
+            }
+        }
+        // The chant itself is heard after it lands.
+        self.noise(self.px, self.py, loud, true)
+        if lo > 0 {
+            self.say("A false voice rings out where your mantra lands.")
+            self.noise(cx, cy, 9 + 6 * lo, false)
+        }
+        1
+    }
+
+    fn remember(&mut self, m: &Vec[i64]) {
+        let mut k: usize = 0
+        while k < self.slots.len() {
+            if same_mantra(&self.slots[k], m) { let _ = self.slots.remove(k) } else { k += 1 }
+        }
+        self.slots.insert(0, m.clone())
+        self.slots.truncate(5)
+    }
+
+    fn push_mon(&mut self, i: usize, ox: i64, oy: i64, dist: i64, ax: i64, ay: i64, form: i64) {
+        let m = self.mons[i]
+        if m.hp <= 0 { return }
+        if m.kind == M_GOLEM || m.kind == M_KEEPER {
+            if self.vis[idx(m.x, m.y)] { self.say("The {mon_name(m.kind)} does not budge.") }
+            return
+        }
+        // Bolts and waves push along the line of the mantra; rings and seeds push outward.
+        let mut dx = sgn(m.x - ox)
+        let mut dy = sgn(m.y - oy)
+        if form == S_KA || form == S_MU || (dx == 0 && dy == 0) {
+            let fx = ax - self.px
+            let fy = ay - self.py
+            let big = iabs(fx).max(iabs(fy)).max(1)
+            dx = sgn(fx * 2 / big)
+            dy = sgn(fy * 2 / big)
+            if dx == 0 && dy == 0 { dx = sgn(fx); dy = sgn(fy) }
+        }
+        let mut x = m.x
+        let mut y = m.y
+        let mut step = 0
+        while step < dist {
+            step += 1
+            let nx = x + dx
+            let ny = y + dy
+            let t = self.t(nx, ny)
+            if t == T_CHASM {
+                self.mons[i].x = nx
+                self.mons[i].y = ny
+                self.mons[i].hp = 0
+                self.kills += 1
+                self.say("The {mon_name(m.kind)} is hurled into the chasm and falls without a sound.")
+                return
+            }
+            if t == T_WALL || t == T_DOOR || t == T_BELL || (nx == self.px && ny == self.py) {
+                self.say("The {mon_name(m.kind)} slams into the wall.")
+                self.mons[i].x = x
+                self.mons[i].y = y
+                self.noise(x, y, 4, false)
+                self.hurt(i, 2 + step / 2, true)
+                self.mons[i].stun = self.mons[i].stun.max(1)
+                return
+            }
+            let other = self.mon_at(nx, ny)
+            if other >= 0 && other as usize != i {
+                self.say("The {mon_name(m.kind)} crashes into the {mon_name(self.mons[other as usize].kind)}.")
+                self.mons[i].x = x
+                self.mons[i].y = y
+                self.hurt(i, 2, true)
+                self.hurt(other as usize, 2, true)
+                return
+            }
+            x = nx
+            y = ny
+            self.mons[i].x = x
+            self.mons[i].y = y
+        }
+        self.mons[i].stun = self.mons[i].stun.max(1)
+    }
+
+    fn ignite(&mut self, x: i64, y: i64, turns: i64) {
+        if !inb(x, y) { return }
+        let t = self.t(x, y)
+        if t == T_WALL || t == T_WATER || t == T_CHASM || t == T_BELL || t == T_STAIRS { return }
+        let i = idx(x, y)
+        let dur = if flammable(t) { turns + 3 } else { turns.min(2) }
+        self.fire[i] = self.fire[i].max(dur)
+    }
+
+    fn flash(&mut self, c: i64) {
+        if c >= 0 && c < W * H { self.fx[c as usize] = true }
+    }
+
+    fn show_fx(&mut self) {
+        if !self.headless && self.delay >= 0 {
+            self.render()
+            sleep_ms(if self.bot { 60 } else { 140 })
+        }
+        let n = (W * H) as usize
+        for i in 0..n { self.fx[i] = false }
+    }
+
+    // ---------------- the world turns
+
+    fn perform(&mut self, a: Act) -> i64 {
+        self.last_noise = 0
+        if !self.headless {
+            for i in 0..(W * H) as usize { self.heard[i] = false }
+        }
+        self.rested = false
+        match a {
+            Act::Move(dx, dy) => self.move_player(dx, dy),
+            Act::Rest => {
+                self.rested = true
+                self.noise(self.px, self.py, if self.sneaking { 0 } else { 1 }, true)
+                1
+            }
+            Act::Chant(m, ax, ay) => self.chant(&m, ax, ay),
+            Act::Herb => self.eat_herb(),
+            Act::Incense => self.burn_incense(),
+            Act::Descend => self.descend(),
+            Act::ToggleSneak => {
+                self.sneaking = !self.sneaking
+                if self.sneaking { self.say("You move softly now: silent, but slow.") } else { self.say("You walk normally.") }
+                0
+            }
+            Act::Nothing => 0,
+            Act::Quit => {
+                self.quit = true
+                self.over = true
+                self.death = "gave up the descent".to_string()
+                0
+            }
+        }
+    }
+
+    fn world_turn(&mut self) {
+        if self.over { return }
+        self.turn += 1
+        self.level_turn += 1
+        if self.level_turn % 150 == 0 { self.tremor() }
+        self.update_fire()
+        let n = (W * H) as usize
+        for i in 0..n { if self.hush[i] > 0 { self.hush[i] -= 1 } }
+        // One map of distances to the player, shared by every hunter.
+        self.bfs(self.px, self.py, -1, false)
+        for i in 0..n { self.pmap[i] = if self.stamp[i] == self.cur_stamp { self.dist[i] } else { -1 } }
+        let mut i: usize = 0
+        while i < self.mons.len() && !self.over {
+            if self.mons[i].hp > 0 {
+                self.mons[i].energy += mon_speed(self.mons[i].kind)
+                while self.mons[i].energy >= 10 && self.mons[i].hp > 0 && !self.over {
+                    self.mons[i].energy -= 10
+                    self.act(i)
+                }
+            }
+            i += 1
+        }
+        let mut k: usize = 0
+        while k < self.mons.len() {
+            if self.mons[k].hp <= 0 { let _ = self.mons.swap_remove(k) } else { k += 1 }
+        }
+        // Breath returns slowly, faster while you rest.
+        self.breath_acc += if self.rested { 2 } else { 1 }
+        if self.breath_acc >= 3 {
+            self.breath_acc -= 3
+            if self.breath < self.maxbreath { self.breath += 1 }
+        }
+        self.heal_acc += 1
+        if self.heal_acc >= 9 {
+            self.heal_acc = 0
+            if self.hp < self.maxhp { self.hp += 1 }
+        }
+    }
+
+    // The longer you linger on a level, the more the deep wakes up around you.
+    fn tremor(&mut self) {
+        self.say("The mountain groans. Things stir in the dark.")
+        for i in 0..self.mons.len() {
+            if self.mons[i].state == ST_ASLEEP && self.chance(35) { self.mons[i].state = ST_WANDER }
+        }
+        // Something climbs up from below, far from you, and comes looking.
+        let mut tries = 0
+        while tries < 50 {
+            tries += 1
+            let (x, y) = self.random_floor()
+            if cheb(x, y, self.px, self.py) < 12 || self.vis[idx(x, y)] { continue }
+            let k = self.pick_kind()
+            self.spawn(k, x, y)
+            let last = self.mons.len() - 1
+            self.mons[last].state = ST_SEARCH
+            self.mons[last].tx = self.px
+            self.mons[last].ty = self.py
+            self.mons[last].timer = 10
+            return
+        }
+    }
+
+    fn update_fire(&mut self) {
+        let n = (W * H) as usize
+        let mut spread: Vec[i64] = Vec::new()
+        for i in 0..n {
+            if self.fire[i] <= 0 { continue }
+            let x = i as i64 % W
+            let y = i as i64 / W
+            let t = self.tiles[i]
+            self.fire[i] -= 1
+            if self.fire[i] == 0 {
+                if flammable(t) { self.tiles[i] = T_ASH }
+                continue
+            }
+            if flammable(t) {
+                for d in 0..8 {
+                    let nx = x + ndx(d)
+                    let ny = y + ndy(d)
+                    if inb(nx, ny) && flammable(self.t(nx, ny)) && self.fire[idx(nx, ny)] == 0 && self.chance(35) {
+                        spread.push(idx(nx, ny) as i64)
+                    }
+                }
+            }
+            if x == self.px && y == self.py { self.hurt_player(2, "burned to death") }
+            let mi = self.mon_at(x, y)
+            if mi >= 0 && self.mons[mi as usize].kind != M_WISP { self.hurt(mi as usize, 2, true) }
+        }
+        for c in &spread { self.ignite(c % W, c / W, 3) }
+        if !spread.is_empty() && self.chance(30) {
+            let c = spread[0]
+            self.noise(c % W, c / W, 3, false)
+        }
+    }
+
+    // Take one step towards (tx, ty), or away from the player when fleeing.
+    fn step_mon(&mut self, i: usize, tx: i64, ty: i64, away: bool) -> bool {
+        let m = self.mons[i]
+        let mut best = -1
+        let mut best_score = 1000000
+        let use_pmap = away || (tx == self.px && ty == self.py)
+        if !use_pmap {
+            self.bfs(tx, ty, idx(m.x, m.y) as i64, false)
+            if self.d(m.x, m.y) < 0 { return false }
+        }
+        for d in 0..8 {
+            let nx = m.x + ndx(d)
+            let ny = m.y + ndy(d)
+            if !inb(nx, ny) { continue }
+            let t = self.t(nx, ny)
+            if !walkable(t) && !(t == T_DOOR) { continue }
+            if nx == self.px && ny == self.py { continue }
+            if self.mon_at(nx, ny) >= 0 { continue }
+            let ni = idx(nx, ny)
+            if self.fire[ni] > 0 && m.kind != M_WISP { continue }
+            let dd = if use_pmap { self.pmap[ni] } else { self.d(nx, ny) }
+            if dd < 0 { continue }
+            let score = if away { -dd } else { dd }
+            let cur = if use_pmap { self.pmap[idx(m.x, m.y)] } else { self.d(m.x, m.y) }
+            if !away && dd >= cur { continue }
+            if away && dd <= cur { continue }
+            if score < best_score { best_score = score; best = d }
+        }
+        if best < 0 { return false }
+        let nx = m.x + ndx(best)
+        let ny = m.y + ndy(best)
+        if self.t(nx, ny) == T_DOOR {
+            self.set_t(nx, ny, T_OPEN)
+            self.noise(nx, ny, 3, false)
+            return true
+        }
+        self.mons[i].x = nx
+        self.mons[i].y = ny
+        if m.kind == M_GOLEM { self.noise(nx, ny, 4, false) }
+        if m.kind == M_WISP && self.t(nx, ny) == T_GRASS && self.chance(25) { self.ignite(nx, ny, 3) }
+        if self.t(nx, ny) == T_WATER && m.kind != M_WISP { self.noise(nx, ny, 2, false) }
+        true
+    }
+
+    fn random_step(&mut self, i: usize) {
+        let m = self.mons[i]
+        let d = self.rn(8)
+        let nx = m.x + ndx(d)
+        let ny = m.y + ndy(d)
+        if self.free(nx, ny) && self.fire[idx(nx, ny)] == 0 {
+            self.mons[i].x = nx
+            self.mons[i].y = ny
+        }
+    }
+
+    fn attack_player(&mut self, i: usize) {
+        let m = self.mons[i]
+        let dmg = self.range(mon_dmg_lo(m.kind), mon_dmg_hi(m.kind))
+        let verb = match m.kind { 0 => "bites", 2 => "sears", 3 => "crushes", 5 => "pounds", _ => "strikes" }
+        self.say("The {mon_name(m.kind)} {verb} you ({dmg}).")
+        self.hurt_player(dmg, "killed by a {mon_name(m.kind)} on depth {self.depth}")
+        self.noise(m.x, m.y, 4, false)
+    }
+
+    fn act(&mut self, i: usize) {
+        let m = self.mons[i]
+        if m.stun > 0 {
+            self.mons[i].stun -= 1
+            return
+        }
+        if m.state == ST_ASLEEP {
+            if self.rn(400) == 0 && !self.vis[idx(m.x, m.y)] { self.mons[i].state = ST_WANDER }
+            return
+        }
+        if m.kind == M_KEEPER && m.state == ST_WANDER {
+            // The Keeper never wanders: it goes back to its vigil by the bell.
+            self.mons[i].state = ST_SEARCH
+            self.mons[i].tx = self.vigil_x
+            self.mons[i].ty = self.vigil_y
+            self.mons[i].timer = 1000000
+        }
+        let m = self.mons[i]
+        let sees = self.sees_player(m)
+        let dist = cheb(m.x, m.y, self.px, self.py)
+        if sees && m.state != ST_FLEE {
+            if m.state != ST_HUNT && self.shows(m) {
+                if m.kind == M_LISTENER {
+                    self.say("The listener's hand finds you.")
+                } else {
+                    self.say("The {mon_name(m.kind)} notices you!")
+                }
+            }
+            self.mons[i].state = ST_HUNT
+            self.mons[i].tx = self.px
+            self.mons[i].ty = self.py
+            self.mons[i].noticed = true
+        }
+        let m = self.mons[i]
+        if m.kind == M_WISP && self.rn(3) == 0 && m.state != ST_ASLEEP {
+            self.random_step(i)
+            return
+        }
+        if m.state == ST_HUNT {
+            if dist <= 1 && sees {
+                self.attack_player(i)
+                return
+            }
+            if m.kind == M_SHADE && sees && dist <= 5 {
+                if dist <= 2 && self.step_mon(i, self.px, self.py, true) { return }
+                // A shade must draw breath between notes.
+                self.mons[i].timer += 1
+                if self.mons[i].timer % 2 == 0 {
+                    if self.shows(m) && self.mons[i].timer == 2 { self.say("The choir shade draws a long breath...") }
+                    return
+                }
+                let dmg = self.range(mon_dmg_lo(m.kind), mon_dmg_hi(m.kind))
+                self.say("The choir shade sings a note that cuts like glass ({dmg}).")
+                self.hurt_player(dmg, "sung apart by a choir shade on depth {self.depth}")
+                self.noise(m.x, m.y, 6, false)
+                return
+            }
+            if m.kind == M_LISTENER && dist <= 1 {
+                // It only knows where you were. Reaching out costs it this turn.
+                self.attack_player(i)
+                return
+            }
+            if !self.step_mon(i, m.tx, m.ty, false) {
+                if m.x == m.tx && m.y == m.ty || !sees {
+                    self.mons[i].state = ST_SEARCH
+                    self.mons[i].timer = 5 + self.rn(6)
+                } else {
+                    self.random_step(i)
+                }
+            }
+            if self.mons[i].x == m.tx && self.mons[i].y == m.ty && !sees {
+                self.mons[i].state = ST_SEARCH
+                self.mons[i].timer = 5 + self.rn(6)
+            }
+            return
+        }
+        if m.state == ST_FLEE {
+            if self.pmap[idx(m.x, m.y)] > 9 || self.pmap[idx(m.x, m.y)] < 0 {
+                self.mons[i].state = ST_WANDER
+                if self.mons[i].hp < self.mons[i].maxhp { self.mons[i].hp += 1 }
+                return
+            }
+            if !self.step_mon(i, self.px, self.py, true) {
+                if dist <= 1 { self.attack_player(i) }
+            }
+            return
+        }
+        if m.state == ST_SEARCH {
+            if m.x == m.tx && m.y == m.ty || cheb(m.x, m.y, m.tx, m.ty) <= 1 && self.rn(2) == 0 {
+                if m.kind == M_KEEPER && m.x == self.vigil_x && m.y == self.vigil_y { return }
+                self.mons[i].timer -= 1
+                if self.mons[i].timer <= 0 {
+                    self.mons[i].state = ST_WANDER
+                } else {
+                    self.random_step(i)
+                }
+                return
+            }
+            if !self.step_mon(i, m.tx, m.ty, false) {
+                self.mons[i].timer -= 1
+                self.random_step(i)
+                if self.mons[i].timer <= 0 { self.mons[i].state = ST_WANDER }
+            }
+            return
+        }
+        // Wandering: drift between places.
+        if m.x == m.tx && m.y == m.ty || self.rn(40) == 0 {
+            let (x, y) = self.random_floor()
+            self.mons[i].tx = x
+            self.mons[i].ty = y
+            return
+        }
+        if self.rn(3) == 0 { return }
+        if !self.step_mon(i, m.tx, m.ty, false) {
+            self.mons[i].tx = m.x
+            self.mons[i].ty = m.y
+        }
+    }
+
+    // ---------------- drawing
+
+    fn tile_glyph(&self, x: i64, y: i64, visible: bool) -> String {
+        let i = idx(x, y)
+        let t = self.tiles[i]
+        let mut s = String::new()
+        if visible && self.hush[i] > 0 { s.push_str(HUSH_BG) }
+        if visible && self.fx[i] { s.push_str(FX_BG) }
+        if visible && self.fire[i] > 0 {
+            s.push_str(if (self.turn + x + y) % 2 == 0 { RED } else { YELLOW })
+            s.push_str("^")
+            return s
+        }
+        if !visible { s.push_str(DIM) }
+        let it = self.items[i]
+        let ripple = visible && self.heard[i]
+        if it != I_NONE {
+            if visible {
+                s.push_str(match it { 1 => GREEN, 2 => CYAN, 3 => YELLOW, _ => MAGENTA })
+            }
+            s.push_str(match it { 1 => "!", 2 => "?", 3 => "*", _ => "%" })
+            return s
+        }
+        if ripple && (t == T_FLOOR || t == T_ASH || t == T_OPEN) {
+            s.push_str(BROWN)
+        } else if visible {
+            s.push_str(match t {
+                0 => GREY, 1 => DIM, 2 => BROWN, 3 => BROWN, 4 => BLUE, 5 => DGREEN,
+                6 => DBLUE, 7 => WHITE, 8 => YELLOW, _ => DIM,
+            })
+        }
+        s.push_str(match t {
+            0 => "#", 1 => ".", 2 => "+", 3 => "'", 4 => "~", 5 => "\"", 6 => ":", 7 => ">", 8 => "\u{3a9}", _ => ",",
+        })
+        s
+    }
+
+    fn bar(&self, cur: i64, max: i64, width: i64, color: str) -> String {
+        let fill = if max > 0 { (cur * width + max - 1) / max } else { 0 }
+        let mut s = String::new()
+        s.push_str(color)
+        for k in 0..width { s.push_str(if k < fill { "=" } else { "-" }) }
+        s.push_str(RESET)
+        s
+    }
+
+    // The panel to the right of the map. Every line fits in 21 columns.
+    fn sidebar(&self) -> Vec[String] {
+        let mut out: Vec[String] = Vec::new()
+        out.push("{BOLD}{YELLOW}THE HOLLOW BELL{RESET}")
+        out.push("Depth {self.depth}/{MAX_DEPTH}  Turn {self.turn}")
+        out.push("HP     {self.bar(self.hp, self.maxhp, 8, RED)} {self.hp}/{self.maxhp}")
+        out.push("Breath {self.bar(self.breath, self.maxbreath, 8, CYAN)} {self.breath}/{self.maxbreath}")
+        let noise = self.last_noise.min(9)
+        let mut nb = String::new()
+        for k in 0..9 { nb.push_str(if k < noise { "|" } else { " " }) }
+        let mode = if self.sneaking { "{GREEN}SNEAK{RESET}" } else { "{DIM}walk{RESET}" }
+        out.push("Noise {YELLOW}{nb}{RESET} {mode}")
+        out.push("Herbs {self.herbs}  Incense {self.incense}")
+        out.push("Shards {self.shards}  Max syl {self.max_syllables()}")
+        // Known syllables, wrapped to the panel width.
+        for f in 0..2 {
+            let mut line = if f == 0 { "{DIM}Forms{RESET} ".to_string() } else { "{DIM}Forces{RESET}".to_string() }
+            let mut width: usize = 6
+            let mut any = false
+            for sy in 0..NSYL {
+                if is_form(sy) != (f == 0) || !self.known[sy as usize] { continue }
+                let name = syl_name(sy)
+                if width + 1 + name.len() > 21 {
+                    out.push(line.clone())
+                    line = "      ".to_string()
+                    width = 6
+                }
+                line.push_str(" {if f == 0 { CYAN } else { YELLOW }}{name}{RESET}")
+                width += 1 + name.len()
+                any = true
+            }
+            if any { out.push(line) }
+        }
+        out.push("{DIM}Mantras (c r C){RESET}")
+        for k in 0..self.slots.len().min(3) {
+            let m = mantra_str(&self.slots[k])
+            let cost = mantra_cost(&self.slots[k])
+            let fits = m.len() + 7 <= 21
+            let col = if cost <= self.breath { WHITE } else { DIM }
+            if fits {
+                out.push(" {k + 1} {col}{m}{RESET} {DIM}{cost}{RESET}")
+            } else {
+                out.push(" {k + 1} {col}{m}{RESET}")
+            }
+        }
+        let mut shown = 0
+        for m in &self.mons {
+            if m.hp <= 0 || !self.shows(m) || shown >= 4 { continue }
+            if shown == 0 { out.push("{DIM}In sight{RESET}") }
+            let st = if m.stun > 0 { "held" } else { state_short(m.state) }
+            let stc = if m.state == ST_HUNT && m.stun == 0 { RED } else { DIM }
+            out.push(" {mon_color(m.kind)}{mon_glyph(m.kind)}{RESET} {mon_short(m.kind)} {m.hp} {stc}{st}{RESET}")
+            shown += 1
+        }
+        out
+    }
+
+    fn render(&self) {
+        if self.headless { return }
+        let mut s = String::with_capacity(16000)
+        s.push_str("\x1b[?25l\x1b[H")
+        let side = self.sidebar()
+        for y in 0..H {
+            for x in 0..W {
+                let i = idx(x, y)
+                let visible = self.vis[i]
+                if x == self.px && y == self.py {
+                    s.push_str(if self.hush[i] > 0 { HUSH_BG } else { "" })
+                    s.push_str(BOLD)
+                    s.push_str(if self.sneaking { GREEN } else { WHITE })
+                    s.push_str("@")
+                    s.push_str(RESET)
+                    continue
+                }
+                if visible {
+                    let mi = self.mon_at(x, y)
+                    if mi >= 0 && self.shows(self.mons[mi as usize]) {
+                        let m = self.mons[mi as usize]
+                        if self.fx[i] { s.push_str(FX_BG) }
+                        if m.state == ST_HUNT { s.push_str(BOLD) }
+                        s.push_str(mon_color(m.kind))
+                        s.push_str(mon_glyph(m.kind))
+                        s.push_str(RESET)
+                        continue
+                    }
+                }
+                if !self.seen[i] {
+                    s.push(' ')
+                    continue
+                }
+                s.push_str(self.tile_glyph(x, y, visible).as_str())
+                s.push_str(RESET)
+            }
+            s.push(' ')
+            if (y as usize) < side.len() { s.push_str(side[y as usize].as_str()) }
+            s.push_str("\x1b[K\n")
+        }
+        // The message log, newest last, or the chant prompt.
+        // Long messages wrap; the newest two messages are bright.
+        let mut lines: Vec[String] = Vec::new()
+        let mut bright: Vec[bool] = Vec::new()
+        let start = if self.log.len() > 4 { self.log.len() - 4 } else { 0 }
+        for k in start..self.log.len() {
+            for l in wrap(self.log[k].as_str(), 79) {
+                lines.push(l)
+                bright.push(k + 2 >= self.log.len())
+            }
+        }
+        if !self.prompt.is_empty() {
+            for l in wrap(self.prompt.as_str(), 79) {
+                lines.push("{BOLD}{CYAN}{l}{RESET}")
+                bright.push(true)
+            }
+        }
+        while lines.len() > 4 {
+            let _ = lines.remove(0)
+            let _ = bright.remove(0)
+        }
+        while lines.len() < 4 {
+            lines.insert(0, String::new())
+            bright.insert(0, false)
+        }
+        for k in 0..lines.len() {
+            if !bright[k] { s.push_str(DIM) }
+            s.push_str(lines[k].as_str())
+            s.push_str(RESET)
+            if k + 1 < lines.len() { s.push_str("\x1b[K\n") } else { s.push_str("\x1b[K\x1b[J") }
+        }
+        print(s)
+    }
+
+    fn nearest_foe(&self) -> i64 {
+        let mut best = -1
+        let mut bd = 1000
+        for i in 0..self.mons.len() {
+            let m = self.mons[i]
+            if m.hp <= 0 || !self.shows(m) { continue }
+            let d = cheb(m.x, m.y, self.px, self.py)
+            if d < bd { bd = d; best = i as i64 }
+        }
+        best
+    }
+
+    // ---------------- the autopilot (used by demo mode and the balance benchmark)
+
+    fn bot_act(&mut self) -> Act {
+        if self.hp * 10 <= self.maxhp * 4 && self.herbs > 0 { return Act::Herb }
+        if self.incense > 0 && self.turn % 50 == 7 { return Act::Incense }
+        let foe = self.nearest_foe()
+        if foe >= 0 {
+            let m = self.mons[foe as usize]
+            let d = cheb(m.x, m.y, self.px, self.py)
+            let awake = m.state != ST_ASLEEP
+            if self.sneaking && awake && m.state == ST_HUNT { return Act::ToggleSneak }
+            // Shove things into chasms when they line up.
+            if self.known[S_VU as usize] && d <= 3 && self.breath >= 2 && self.chasm_behind(m) {
+                return Act::Chant([S_KA, S_VU], m.x, m.y)
+            }
+            let mut adj = 0
+            for o in &self.mons { if o.hp > 0 && cheb(o.x, o.y, self.px, self.py) <= 1 { adj += 1 } }
+            if adj >= 2 && self.known[S_RA as usize] && self.breath >= 4 { return Act::Chant([S_RA, S_OM], self.px, self.py) }
+            if !awake && m.kind != M_GOLEM {
+                // Creep up and strike it in its sleep.
+                if d <= 1 { return Act::Move(m.x - self.px, m.y - self.py) }
+                if !self.sneaking { return Act::ToggleSneak }
+                return self.bot_walk_to(m.x, m.y)
+            }
+            if m.kind == M_LISTENER && m.state != ST_HUNT && d > 1 {
+                // Blind and deadly: slip past it in silence rather than fight.
+                if !self.sneaking { return Act::ToggleSneak }
+                return self.bot_explore()
+            }
+            if d <= 8 && self.los(self.px, self.py, m.x, m.y) {
+                let strong = self.max_syllables() >= 3 && self.breath >= 5 + 2 && m.hp > 3
+                if strong { return Act::Chant([S_KA, S_OM, S_OM], m.x, m.y) }
+                if self.breath >= 3 { return Act::Chant([S_KA, S_OM], m.x, m.y) }
+                if self.known[S_NA as usize] && self.breath >= 3 && d <= 2 { return Act::Chant([S_KA, S_NA], m.x, m.y) }
+            }
+            if d <= 1 { return Act::Move(m.x - self.px, m.y - self.py) }
+            if m.state == ST_HUNT { return Act::Rest }
+        }
+        if self.sneaking && foe < 0 { return Act::ToggleSneak }
+        if self.hp * 10 < self.maxhp * 6 || self.breath * 2 < self.maxbreath { return Act::Rest }
+        self.bot_explore()
+    }
+
+    fn chasm_behind(&self, m: Mon) -> bool {
+        let dx = sgn(m.x - self.px)
+        let dy = sgn(m.y - self.py)
+        if m.kind == M_GOLEM || m.kind == M_KEEPER { return false }
+        if !(m.x - self.px == 0 || m.y - self.py == 0 || iabs(m.x - self.px) == iabs(m.y - self.py)) { return false }
+        self.t(m.x + dx, m.y + dy) == T_CHASM || self.t(m.x + 2 * dx, m.y + 2 * dy) == T_CHASM && walkable(self.t(m.x + dx, m.y + dy))
+    }
+
+    fn bot_walk_to(&mut self, gx: i64, gy: i64) -> Act {
+        // Distances from the goal; then step to the neighbour that is closest.
+        self.bfs(gx, gy, idx(self.px, self.py) as i64, true)
+        let cur = self.d(self.px, self.py)
+        if cur < 0 { return Act::Rest }
+        let mut best = -1
+        let mut bd = cur
+        for d in 0..8 {
+            let nx = self.px + ndx(d)
+            let ny = self.py + ndy(d)
+            if !inb(nx, ny) { continue }
+            let dd = self.d(nx, ny)
+            if dd >= 0 && dd < bd && self.fire[idx(nx, ny)] == 0 { bd = dd; best = d }
+        }
+        if best < 0 { return Act::Rest }
+        Act::Move(ndx(best), ndy(best))
+    }
+
+    // Breadth-first from the player over known ground to the nearest item, or
+    // the nearest tile that borders the unknown. Returns its index, or -1.
+    fn explore_goal(&mut self) -> i64 {
+        self.bfs(self.px, self.py, -1, true)
+        let mut goal = -1
+        let mut gd = 100000
+        for y in 0..H {
+            for x in 0..W {
+                let i = idx(x, y)
+                let dd = self.d(x, y)
+                if dd <= 0 { continue }
+                let mut want = self.items[i] != I_NONE
+                if !want {
+                    for d in 0..8 {
+                        let nx = x + ndx(d)
+                        let ny = y + ndy(d)
+                        if inb(nx, ny) && !self.seen[idx(nx, ny)] { want = true }
+                    }
+                }
+                if want && dd < gd { gd = dd; goal = i as i64 }
+            }
+        }
+        goal
+    }
+
+    fn find_tile(&self, t: i64) -> i64 {
+        for i in 0..(W * H) as usize {
+            if self.tiles[i] == t && self.seen[i] { return i as i64 }
+        }
+        -1
+    }
+
+    // Is anything awake, or close, in sight? Auto-explore stops for it.
+    fn danger(&self) -> bool {
+        for m in &self.mons {
+            if m.hp > 0 && self.shows(m) && (m.state != ST_ASLEEP || cheb(m.x, m.y, self.px, self.py) <= 3) { return true }
+        }
+        false
+    }
+
+    // One step of auto-explore (or of travel to the stairs).
+    fn auto_step(&mut self, to_stairs: bool) -> Act {
+        if to_stairs {
+            let st = self.find_tile(T_STAIRS)
+            if st < 0 {
+                self.say("You have not found the stairs down yet.")
+                return Act::Nothing
+            }
+            if st % W == self.px && st / W == self.py { return Act::Nothing }
+            return self.bot_walk_to(st % W, st / W)
+        }
+        let goal = self.explore_goal()
+        if goal < 0 {
+            if self.find_tile(T_STAIRS) >= 0 {
+                self.say("Nothing left to explore here. Press > to walk to the stairs.")
+            } else {
+                self.say("Nothing left to explore that you can reach.")
+            }
+            return Act::Nothing
+        }
+        self.bot_walk_to(goal % W, goal / W)
+    }
+
+    fn bot_explore(&mut self) -> Act {
+        // Breadth-first from the player over known ground to the nearest
+        // item, or the nearest tile that borders the unknown.
+        self.bfs(self.px, self.py, -1, true)
+        let mut goal = -1
+        let mut gd = 100000
+        let mut stairs = -1
+        for y in 0..H {
+            for x in 0..W {
+                let i = idx(x, y)
+                let dd = self.d(x, y)
+                if dd < 0 { continue }
+                let t = self.tiles[i]
+                if t == T_STAIRS { stairs = i as i64 }
+                let mut want = self.items[i] != I_NONE
+                if !want {
+                    for d in 0..8 {
+                        let nx = x + ndx(d)
+                        let ny = y + ndy(d)
+                        if inb(nx, ny) && !self.seen[idx(nx, ny)] { want = true }
+                    }
+                }
+                if want && dd > 0 && dd < gd { gd = dd; goal = i as i64 }
+            }
+        }
+        // The bell is the goal on the last level; on others, descend once
+        // the level is mostly explored or the walk is getting long.
+        for y in 0..H {
+            for x in 0..W {
+                if self.tiles[idx(x, y)] == T_BELL && self.seen[idx(x, y)] {
+                    for d in 0..8 {
+                        if x + ndx(d) == self.px && y + ndy(d) == self.py { return Act::Move(-ndx(d), -ndy(d)) }
+                    }
+                    if goal < 0 || self.chance(70) {
+                        let mut best = -1
+                        for d in 0..8 {
+                            let nx = x + ndx(d)
+                            let ny = y + ndy(d)
+                            if inb(nx, ny) && walkable(self.t(nx, ny)) && self.seen[idx(nx, ny)] { best = d }
+                        }
+                        if best >= 0 { return self.bot_walk_to(x + ndx(best), y + ndy(best)) }
+                    }
+                }
+            }
+        }
+        if stairs >= 0 && (goal < 0 || self.turn > self.depth * 400) {
+            if self.px == stairs % W && self.py == stairs / W { return Act::Descend }
+            return self.bot_walk_to(stairs % W, stairs / W)
+        }
+        if goal < 0 { return Act::Rest }
+        self.bot_walk_to(goal % W, goal / W)
+    }
+}
+
+// ---------------------------------------------------------------- input
+
+fn key_dir(k: i64) -> Option[(i64, i64)] {
+    if k == K_UP || k == 'k' as i64 || k == '8' as i64 { return Some((0, -1)) }
+    if k == K_DOWN || k == 'j' as i64 || k == '2' as i64 { return Some((0, 1)) }
+    if k == K_LEFT || k == 'h' as i64 || k == '4' as i64 { return Some((-1, 0)) }
+    if k == K_RIGHT || k == 'l' as i64 || k == '6' as i64 { return Some((1, 0)) }
+    if k == 'y' as i64 || k == '7' as i64 { return Some((-1, -1)) }
+    if k == 'u' as i64 || k == '9' as i64 { return Some((1, -1)) }
+    if k == 'b' as i64 || k == '1' as i64 { return Some((-1, 1)) }
+    if k == 'n' as i64 || k == '3' as i64 { return Some((1, 1)) }
+    None
+}
+
+// Ask where to aim; returns the target point.
+fn aim(g: &mut Game, m: &Vec[i64]) -> Option[(i64, i64)] {
+    if m[0] == S_RA { return Some((g.px, g.py)) }
+    let foe = g.nearest_foe()
+    let hint = if foe >= 0 { " Enter/t = nearest foe," } else { "" }
+    g.prompt = "Aim \"{mantra_str(m)}\": direction key,{hint} Esc cancels"
+    g.render()
+    let k = read_key()
+    g.prompt.clear()
+    if let Some((dx, dy)) = key_dir(k) { return Some((g.px + dx * 9, g.py + dy * 9)) }
+    if (k == K_ENTER || k == 't' as i64 || k == 9 || k == 'f' as i64) && foe >= 0 {
+        let f = g.mons[foe as usize]
+        return Some((f.x, f.y))
+    }
+    None
+}
+
+fn read_mantra(g: &mut Game) -> Option[Vec[i64]] {
+    let mut text = String::new()
+    loop {
+        g.prompt = "Chant (e.g. ka om, then Enter; Esc cancels): {text}_"
+        g.render()
+        let k = read_key()
+        if k < 0 || k == K_ESC { g.prompt.clear(); return None }
+        if k == K_ENTER { break }
+        if k == 127 || k == 8 {
+            let _ = text.pop()
+            continue
+        }
+        if k >= 32 && k < 127 {
+            if let Some(c) = char::from_u32(k as u32) { text.push(c) }
+        }
+    }
+    g.prompt.clear()
+    match parse_mantra(text.as_str()) {
+        Some(m) => Some(m),
+        None => {
+            g.say("\"{text}\" is not made of syllables you know.")
+            None
+        }
+    }
+}
+
+fn key_to_act(g: &mut Game, k: i64) -> Act {
+    if let Some((dx, dy)) = key_dir(k) { return Act::Move(dx, dy) }
+    if k == '.' as i64 || k == '5' as i64 || k == ' ' as i64 || k == 'z' as i64 { return Act::Rest }
+    if k == 's' as i64 { return Act::ToggleSneak }
+    if k == 'q' as i64 { return Act::Herb }
+    if k == 'e' as i64 { return Act::Incense }
+    if k == '>' as i64 { return Act::Descend }
+    if k == 'Q' as i64 {
+        g.prompt = "Abandon the descent? (y/n)".to_string()
+        g.render()
+        let yes = read_key() == 'y' as i64
+        g.prompt.clear()
+        return if yes { Act::Quit } else { Act::Nothing }
+    }
+    if k == '?' as i64 {
+        help_screen()
+        return Act::Nothing
+    }
+    let mut chosen: Option[Vec[i64]] = None
+    if k == 'c' as i64 {
+        chosen = read_mantra(&mut g)
+    } else if k == 'r' as i64 || k == 'a' as i64 {
+        if !g.slots.is_empty() { chosen = Some(g.slots[0].clone()) }
+    } else if k == 'C' as i64 {
+        g.prompt = "Recall which mantra? (1-4)".to_string()
+        g.render()
+        let n = read_key() - '1' as i64
+        g.prompt.clear()
+        if n >= 0 && n < g.slots.len() as i64 { chosen = Some(g.slots[n as usize].clone()) }
+    }
+    if let Some(m) = chosen {
+        if !g.check_mantra(&m) { return Act::Nothing }
+        if let Some((ax, ay)) = aim(&mut g, &m) { return Act::Chant(m, ax, ay) }
+    }
+    Act::Nothing
+}
+
+// ---------------------------------------------------------------- screens
+
+fn clear_screen() { print("\x1b[2J\x1b[H") }
+
+fn help_screen() {
+    clear_screen()
+    print("{BOLD}{YELLOW}THE HOLLOW BELL: how to play{RESET}
+
+Reach depth {MAX_DEPTH} and strike the Hollow Bell ({YELLOW}\u{3a9}{RESET}) by walking into it.
+
+{BOLD}Moving{RESET}   arrows or hjkl yubn (or the number pad). Walk into a creature to strike it.
+          . or space waits and catches your breath.  s  toggles sneaking.
+          x  explores on its own until something happens.  >  walks to the stairs and takes them.
+{BOLD}Items{RESET}    q eats a herb (+10 HP, +2 breath).  e burns incense (reveals the level).
+          {CYAN}?{RESET} tablets teach syllables.  {YELLOW}*{RESET} bell shards deepen your breath.
+
+{BOLD}Mantras{RESET}  c then type syllables, then Enter, then aim (direction, or Enter for the nearest foe).
+          r repeats your last mantra.  C recalls one of your last four.
+          A mantra is a FORM followed by one or more FORCES. Repeating a force makes it stronger.
+          {CYAN}ka{RESET} bolt   {CYAN}ra{RESET} ring around you   {CYAN}mu{RESET} wave (cone)   {CYAN}su{RESET} seed (bursts where it lands)
+          {YELLOW}om{RESET} strike {YELLOW}hai{RESET} flame  {YELLOW}vu{RESET} push  {YELLOW}na{RESET} still  {YELLOW}sha{RESET} hush  {YELLOW}lo{RESET} lure
+          Examples: ka om om (a heavy bolt), ra vu (shove everything away), su lo (a decoy noise),
+          ra sha (a pool of silence around you), mu hai (a fan of fire), ka vu (push a foe into a chasm).
+
+{BOLD}Sound{RESET}    Everything you do makes noise; the meter shows how much. Noise flows through open
+          ground, is muffled by closed doors, and cannot cross hushed ground ({BLUE}blue{RESET}).
+          Chanting is loud unless the mantra contains sha. Water splashes. Sneaking is silent but slow.
+          Sleeping and unaware creatures take double or triple damage from your strikes.
+          Standing in tall grass ({DGREEN}\"{RESET}) hides you from eyes more than two steps away.
+          {MAGENTA}L{RESET} listeners are blind and hear everything. Be quiet near them.
+
+{DIM}Press any key.{RESET}")
+    let _ = read_key()
+}
+
+fn title_screen() -> i64 {
+    clear_screen()
+    print("{YELLOW}
+                                     _
+                                    (_)
+                                .--'' ''--.
+                               /           \\
+                              |             |
+                              |             |
+                              |             |
+                             /               \\
+                            '-------( )-------'
+{RESET}
+                     {BOLD}T H E    H O L L O W    B E L L{RESET}
+              {DIM}a stealth roguelike of sound, silence and spoken spells{RESET}
+
+     Far under the mountain, the monastery drowned. The Hollow Bell still hangs
+     at the bottom, and while it is silent the mountain does not sleep.
+     You have no sword. You have your breath, and the old syllables.
+
+          {BOLD}Enter{RESET}  begin the descent             {BOLD}s{RESET}  begin with a chosen seed
+          {BOLD}d{RESET}      watch the monk play itself    {BOLD}b{RESET}  balance benchmark (100 runs)
+          {BOLD}?{RESET}      how to play                   {BOLD}q{RESET}  quit
+")
+    read_key()
+}
+
+fn read_number(g_prompt: str) -> u64 {
+    let mut n: u64 = 0
+    print("{g_prompt}")
+    loop {
+        let k = read_key()
+        if k < 0 || k == K_ENTER { break }
+        if k >= '0' as i64 && k <= '9' as i64 {
+            n = n * 10 + (k - '0' as i64) as u64
+            print("{n}")
+        }
+    }
+    n
+}
+
+fn score(g: &Game) -> i64 {
+    g.depth * 100 + g.kills * 10 + g.shards * 50 + if g.won { 1000 } else { 0 }
+}
+
+fn end_screen(g: &Game) {
+    g.render()
+    print("")
+    if g.won {
+        print("{BOLD}{YELLOW}The bell's voice climbs the drowned stairs and out into the dawn.{RESET}")
+        print("{BOLD}You have woken the mountain. Victory on turn {g.turn}.{RESET}")
+    } else if g.quit {
+        print("{DIM}You turn back toward the light.{RESET}")
+    } else {
+        print("{BOLD}{RED}You died: {g.death}.{RESET}")
+    }
+    print("Depth {g.depth}, {g.kills} creatures stilled, {g.chants} mantras spoken, {g.shards} shards. Score {score(g)}.  Seed {g.seed}.")
+    print("{DIM}Press any key.{RESET}")
+    let _ = read_key()
+}
+
+// ---------------------------------------------------------------- main loops
+
+fn play(seed: u64, bot: bool) {
+    let mut g = new_game(seed)
+    g.bot = bot
+    g.gen_level()
+    g.say("You descend into the drowned monastery. Strike the Hollow Bell on depth {MAX_DEPTH}.")
+    g.say("You know three syllables: KA (bolt), OM (strike), VU (push). Press ? for help.")
+    clear_screen()
+    while !g.over {
+        g.render()
+        let a = if bot {
+            sleep_ms(70)
+            g.bot_act()
+        } else {
+            let k = read_key()
+            if k == 'x' as i64 || k == '>' as i64 && g.t(g.px, g.py) != T_STAIRS {
+                travel(&mut g, k == '>' as i64)
+                Act::Nothing
+            } else if k < 0 {
+                Act::Quit
+            } else {
+                key_to_act(&mut g, k)
+            }
+        }
+        let cost = g.perform(a)
+        for _ in 0..cost { g.world_turn() }
+        if cost > 0 { g.compute_fov() }
+        if bot && g.turn > 6000 { g.over = true; g.death = "lost in the dark".to_string() }
+    }
+    end_screen(&g)
+}
+
+// Auto-explore (x) or walk to the stairs (>), until something happens.
+fn travel(g: &mut Game, to_stairs: bool) {
+    if g.danger() {
+        g.say("Not with danger in sight.")
+        return
+    }
+    let mut steps = 0
+    while steps < 400 && !g.over {
+        let a = g.auto_step(to_stairs)
+        match a {
+            Act::Nothing => {
+                if to_stairs && g.t(g.px, g.py) == T_STAIRS {
+                    let _ = g.perform(Act::Descend)
+                    g.world_turn()
+                    g.compute_fov()
+                }
+                return
+            }
+            _ => {}
+        }
+        let msgs = g.msgs
+        let hp = g.hp
+        let cost = g.perform(a)
+        if cost == 0 { return }
+        for _ in 0..cost { g.world_turn() }
+        g.compute_fov()
+        steps += 1
+        if g.hp < hp || g.msgs != msgs || g.danger() { return }
+        g.render()
+        sleep_ms(12)
+    }
+}
+
+// Plays many games with the autopilot, silently, and reports how they went.
+fn benchmark(runs: i64) {
+    clear_screen()
+    print("Running {runs} autopilot descents...")
+    let mut wins = 0
+    let mut depth_sum = 0
+    let mut turn_sum = 0
+    let mut kill_sum = 0
+    let mut reached: Vec[i64] = [0; (MAX_DEPTH + 1) as usize]
+    let mut causes: Vec[String] = Vec::new()
+    let mut cause_n: Vec[i64] = Vec::new()
+    let t0 = time_ns()
+    for r in 0..runs {
+        let mut g = new_game((r + 1) as u64 * 7919)
+        g.headless = true
+        g.bot = true
+        g.gen_level()
+        while !g.over {
+            let a = g.bot_act()
+            let cost = g.perform(a)
+            for _ in 0..cost { g.world_turn() }
+            if cost > 0 { g.compute_fov() }
+            if g.turn > 6000 { g.over = true; g.death = "lost in the dark".to_string() }
+        }
+        if g.won { wins += 1 }
+        depth_sum += g.depth
+        turn_sum += g.turn
+        kill_sum += g.kills
+        reached[g.depth as usize] += 1
+        if !g.won {
+            // Group causes by the creature, ignoring the depth.
+            let c = match g.death.as_str().find(" on depth") {
+                Some(p) => g.death.as_str().slice(0, p).to_string(),
+                None => g.death.clone(),
+            }
+            let mut found = false
+            for k in 0..causes.len() {
+                if causes[k] == c { cause_n[k] += 1; found = true }
+            }
+            if !found { causes.push(c); cause_n.push(1) }
+        }
+    }
+    let ms = (time_ns() - t0) / 1_000_000
+    print("Wins: {wins}/{runs}   average depth {depth_sum as f64 / runs as f64}   average turns {turn_sum / runs}   kills/run {kill_sum as f64 / runs as f64}")
+    let mut line = String::new()
+    for d in 1..MAX_DEPTH + 1 { line.push_str("d{d}:{reached[d as usize]} ") }
+    print("Final depth: {line}")
+    for k in 0..causes.len() { print("  {cause_n[k]} x {causes[k]}") }
+    print("({ms} ms, {ms / runs} ms per run)")
+}
+
+fn main() {
+    loop {
+        let k = title_screen()
+        if k < 0 || k == 'q' as i64 || k == 'Q' as i64 { break }
+        if k == '?' as i64 { help_screen(); continue }
+        if k == 'b' as i64 {
+            benchmark(100)
+            print("Press any key.")
+            if read_key() < 0 { break }
+            continue
+        }
+        if k == 'd' as i64 {
+            play((time_ns() as u64) >> 8, true)
+            continue
+        }
+        if k == 's' as i64 {
+            let seed = read_number("\nSeed: ")
+            play(seed, false)
+            continue
+        }
+        if k == K_ENTER || k == ' ' as i64 {
+            play((time_ns() as u64) >> 8, false)
+        }
+    }
+    print("\x1b[?25h{RESET}")
+}

@@ -1,0 +1,5 @@
+# Keep LF line endings on every platform, so Windows checkouts produce the
+# same sources and expected outputs (`*.expected`) as Linux and macOS.
+* text=auto eol=lf
+*.png binary
+*.ico binary

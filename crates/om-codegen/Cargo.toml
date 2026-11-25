@@ -11,5 +11,6 @@ cranelift-frontend = "0.138.0"
 cranelift-module = "0.138.0"
 cranelift-native = "0.138.0"
 cranelift-object = "0.138.0"
+target-lexicon = "0.13"
 om-lexer = { version = "0.1.0", path = "../om-lexer" }
 om-parser = { version = "0.1.0", path = "../om-parser" }

@@ -19,6 +19,8 @@ pub mod suggest;
 pub mod testing;
 pub mod tokens;
 
+pub mod link;
+
 use om_lexer::Span;
 use om_parser::ast::Program;
 use std::io::Read;
@@ -105,6 +107,11 @@ pub const MAX_SOURCE_BYTES: u64 = 16 << 20;
 
 /// Read a source file, refusing huge files, devices and invalid UTF-8.
 pub fn read_source(path: &Path) -> Result<String, String> {
+    // Windows cannot open a directory as a file at all, so look first; the
+    // check after opening still catches a path swapped in between.
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        return Err(format!("`{}` is not a regular file", path.display()));
+    }
     let file = std::fs::File::open(path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
     let meta = file.metadata().map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
     if !meta.is_file() {
@@ -214,28 +221,7 @@ pub fn build(src: &str, out: &Path) -> Result<(), Diagnostic> {
 
 /// Link an object file with the Om runtime into an executable at `out`.
 pub fn link(object: &[u8], out: &Path) -> Result<(), Diagnostic> {
-    let dir = TempDir::new().map_err(|e| Diagnostic::plain(format!("creating temp dir: {e}")))?;
-    let obj_path = dir.path().join("program.o");
-    let rt_path = dir.path().join("om_runtime.c");
-    write_new(&obj_path, object).map_err(|e| Diagnostic::plain(format!("writing object file: {e}")))?;
-    write_new(&rt_path, om_codegen::RUNTIME_C.as_bytes())
-        .map_err(|e| Diagnostic::plain(format!("writing runtime: {e}")))?;
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    let status = Command::new(&cc)
-        .arg(&obj_path)
-        .arg(&rt_path)
-        .arg("-O2")
-        .arg("-lm")
-        .arg("-o")
-        .arg(safe_arg_path(out))
-        .status()
-        .map_err(|e| {
-            Diagnostic::plain(format!("could not run the linker `{cc}`: {e}. Install a C compiler (cc, gcc or clang)."))
-        })?;
-    if !status.success() {
-        return Err(Diagnostic::plain(format!("linking failed ({status})")));
-    }
-    Ok(())
+    link::link(object, out).map_err(Diagnostic::plain)
 }
 
 /// Start `cmd`. Linux can briefly refuse to run a just-linked program with
@@ -253,17 +239,8 @@ pub fn spawn(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     }
 }
 
-/// A relative path that starts with `-` would be read by `cc` as an option.
-fn safe_arg_path(p: &Path) -> PathBuf {
-    if p.is_relative() && p.to_string_lossy().starts_with('-') {
-        Path::new(".").join(p)
-    } else {
-        p.to_path_buf()
-    }
-}
-
 /// Create `path` (which must not exist yet) and write `bytes` to it.
-fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     f.write_all(bytes)
@@ -283,6 +260,7 @@ impl TempDir {
         let mut last = None;
         for _ in 0..16 {
             let dir = base.join(format!("om-{}-{:016x}", std::process::id(), random_u64()));
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
@@ -374,8 +352,9 @@ mod tests {
 
     #[test]
     fn output_paths_cannot_become_linker_options() {
-        assert_eq!(safe_arg_path(Path::new("-lfoo")), Path::new("./-lfoo"));
-        assert_eq!(safe_arg_path(Path::new("out")), Path::new("out"));
+        // The linker gets an absolute output path, which never starts with `-`.
+        let p = link::absolute(Path::new("-lfoo")).unwrap();
+        assert!(p.is_absolute() && !p.to_string_lossy().starts_with('-'));
     }
 
     #[test]

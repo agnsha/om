@@ -5,6 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `.exe` on Windows, so the built program can be started.
+const EXE: &str = std::env::consts::EXE_SUFFIX;
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -12,7 +15,7 @@ fn root() -> PathBuf {
 fn build_and_run(src: &str, name: &str) -> String {
     // A private directory per build: two tests may use the same name.
     let dir = omc::TempDir::new().unwrap();
-    let exe = dir.path().join(name);
+    let exe = dir.path().join(format!("{name}{EXE}"));
     omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
     let out = run_exe(&exe);
     assert!(out.status.success(), "{name} exited with {}", out.status);
@@ -53,7 +56,7 @@ fn examples_produce_expected_output() {
 #[test]
 fn main_return_value_is_exit_code() {
     let dir = omc::TempDir::new().unwrap();
-    let exe = dir.path().join("exit");
+    let exe = dir.path().join(format!("exit{EXE}"));
     omc::build("fn main() -> i64 { 3 + 4 }", &exe).unwrap();
     assert_eq!(run_exe(&exe).status.code(), Some(7));
 }
@@ -307,7 +310,7 @@ fn rejects_bad_programs() {
 
 fn run_status(src: &str, name: &str) -> (String, String, i32) {
     let dir = omc::TempDir::new().unwrap();
-    let exe = dir.path().join(name);
+    let exe = dir.path().join(format!("{name}{EXE}"));
     omc::build(src, &exe).expect("build should succeed");
     let out = run_exe(&exe);
     (
@@ -467,7 +470,8 @@ fn rejects_bad_trait_programs() {
         ("struct A {} impl Shape for A {} fn main() {}", "cannot find trait `Shape`"),
         ("fn f[T](x: T) where U: Eq {} fn main() {}", "`U` is not a type parameter"),
         ("struct A {} fn big[T: Ord](a: T) {} fn main() { big(A {}) }", "A does not implement `Ord`"),
-        ("struct A {} fn main() { let x = A {} == A {} }", "implement `Eq` for it"),
+        // Structs, tuples and data-free enums compare field by field; enums with data need `Eq`.
+        ("enum A { X(i64) } fn main() { let x = A::X(1) == A::X(1) }", "implement `Eq` for it"),
         ("struct A {} fn main() { A {}.max(A {}) }", "trait `Ord` has one, but A does not implement it"),
         ("impl i64 { fn f(self) {} } fn main() {}", "implement a trait for it"),
         (
@@ -620,4 +624,200 @@ fn borrowed_list_loops_self_constructors_and_string_eq() {
     assert!(got.contains("cannot change `w`: it is borrowed with `&`"), "{got}");
     let got = compile_error("fn f(v: &Vec[i64]) { v[0] = 2 } fn main() {}");
     assert!(got.contains("read-only") || got.contains("cannot"), "{got}");
+}
+
+/// Build `src` and run it with `input` on stdin; return stdout.
+fn run_with_input(src: &str, name: &str, input: &[u8]) -> String {
+    run_with_args(src, name, &[], input)
+}
+
+fn run_with_args(src: &str, name: &str, args: &[&str], input: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::Stdio;
+    let dir = omc::TempDir::new().unwrap();
+    let exe = dir.path().join(format!("{name}{EXE}"));
+    omc::build(src, &exe).unwrap_or_else(|d| panic!("{}", d.render(name, src)));
+    let mut child = omc::spawn(Command::new(&exe).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()))
+        .expect("run compiled program");
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{name} exited with {}", out.status);
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn read_key_time_and_sleep() {
+    let src = r#"
+        fn main() {
+            let t0 = time_ns()
+            sleep_ms(5)
+            print(time_ns() - t0 >= 5_000_000)
+            print(t0 > 1_600_000_000_000_000_000)
+            let mut keys = String::new()
+            loop {
+                let k = read_key()
+                if k < 0 { break }
+                keys.push_str("{k} ")
+            }
+            print(keys)
+        }
+    "#;
+    assert_eq!(run_with_input(src, "keys", b"a\n\x1b"), "true\ntrue\n97 10 27 \n");
+}
+
+#[test]
+fn string_escapes_include_unicode_and_hex() {
+    let src = r#"fn main() { print("\u{1b}[1m|\x41\u{e9}\'|\x1b[0m".len()) }"#;
+    assert_eq!(build_and_run(src, "escapes"), "14\n");
+}
+
+#[test]
+fn hollow_bell_game_builds_and_quits() {
+    let src = std::fs::read_to_string(root().join("games/hollow-bell/hollow_bell.om")).unwrap();
+    // Start a seeded game, take a few steps, chant, quit, and leave the title screen.
+    let out = run_with_input(&src, "hollow_bell", b"s42\nllllckaom\n\nQyxq");
+    assert!(out.contains("T H E    H O L L O W    B E L L"), "{out}");
+    assert!(out.contains("Depth 1/6"), "{out}");
+    assert!(out.contains("Seed 42"), "{out}");
+}
+
+/// Text a terminal would show, with escape sequences taken out.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[test]
+fn emberdeep_renders_and_plays() {
+    let src = std::fs::read_to_string(root().join("games/emberdeep/emberdeep.om")).unwrap();
+    // Draw 200 frames of the first level (with the HUD), then let the autopilot
+    // play two whole games.
+    let frames = strip_ansi(&run_with_args(&src, "emberdeep_bench", &["7", "--bench"], b""));
+    assert!(frames.contains("DEPTH 1/6"), "{frames}");
+    assert!(frames.contains("EMBERS"), "{frames}");
+    let sim = run_with_args(&src, "emberdeep_sim", &["--sim", "2"], b"");
+    assert!(sim.starts_with("2 games: "), "{sim}");
+    // Start a game from the title screen and quit at the end of input.
+    run_with_input(&src, "emberdeep", b"\n");
+}
+
+#[test]
+fn conveniences_from_writing_a_3d_game() {
+    let src = r#"
+        struct Player { name: String, hp: f64 = 100.0, bag: Vec[i64] = Vec::new(), lives: i64 = LIVES }
+        const LIVES: i64 = 3
+        fn pair(a: i64, b: i64) -> (i64, i64) {
+            let s = a + b
+            (s, a * b)
+        }
+        fn main() {
+            // Struct fields can have defaults.
+            let mut p = Player { name: "ash" }
+            p.bag.push(7)
+            let q = Player { name: "bo", lives: 9 }
+            print("{p.name} {p.hp} {p.bag} {p.lives} {q.lives}")
+            // Integers of different types compare by value.
+            let v = [1, 2, 3]
+            let mut i = -1
+            let mut n = 0
+            while i < v.len() { i += 1; n += 1 }
+            let big: u64 = 18446744073709551615
+            let neg = -1
+            print("{n} {neg < v.len()} {big > i} {3u8 == 3i64}")
+            // A `(` that starts a line is not a call of the line before.
+            print(pair(2, 3))
+        }
+    "#;
+    assert_eq!(build_and_run(src, "conveniences_3d"), "ash 100 [7] 3 9\n4 true true true\n(5, 6)\n");
+}
+
+#[test]
+fn conveniences_from_writing_games() {
+    let src = r#"
+        const WALL: i64 = 0
+        const FLOOR: i64 = 1
+        const NEG: i64 = -5
+        enum T { Wall, Floor }
+        struct P { x: i64, y: i64 }
+        struct Named { p: P, name: String, t: T }
+        fn tile(t: i64) -> str { match t { WALL => "wall", FLOOR | 7 => "floor", NEG => "neg", _ => "?" } }
+        fn label(x: i64) -> str { if x > 0 { "pos" } else { "neg" } }
+        fn shout(s: String) -> String { s + "!" }
+        fn sum(v: &Vec[i64]) -> i64 { let mut t = 0; for x in v { t += *x }; t }
+        fn main() {
+            // Any integer type indexes a list, and sizes a `[x; n]`.
+            let v = [10, 20, 30]
+            let i: i64 = 2
+            let j: i32 = 1
+            print("{v[i]} {v[j]} {[7; i]} {[1; -2i64]}")
+            // Unused values at the end of a loop body or an else-less `if` are dropped.
+            let mut log = ["a".to_string(), "b".to_string()]
+            for _ in 0..3 { log.pop() }
+            if log.is_empty() { log.push("c"); log.len() }
+            print(log)
+            // `str` becomes `String` where a String is wanted.
+            let mut s = String::new()
+            s = "hello"
+            let n = Named { p: P { x: 1, y: 2 }, name: "monk", t: T::Floor }
+            let mode = if n.p.x > 0 { "{n.p.x} high" } else { "low" }
+            let loud = shout("hey")
+            print("{s} {n.name} {mode} {loud} {label(-1)}")
+            // `==` without an `Eq` impl, field by field.
+            let m = Named { p: P { x: 1, y: 2 }, name: "monk".to_string(), t: T::Floor }
+            print("{n == m} {T::Wall == T::Floor} {(1, 'a') == (1, 'a')} {P { x: 1, y: 2 } != P { x: 1, y: 3 }}")
+            // Constants as patterns; `*x` on a plain value is the value.
+            print("{tile(0)} {tile(7)} {tile(-5)} {tile(9)} {sum(&v)}")
+            // `Vec::new()` takes its element type from a later push.
+            let mut ps = Vec::new()
+            for k in 0..2 { ps.push(P { x: k, y: k }) }
+            let mut later = Vec::new()
+            let c = 'z'
+            later.push(c)
+            print("{ps} {later}")
+            print("no newline", end: "")
+            print("|", end: "\n")
+            eprint("to stderr")
+        }
+    "#;
+    let (out, errout, code) = run_status(src, "conveniences");
+    assert_eq!(code, 0, "{errout}");
+    assert_eq!(
+        out,
+        "30 20 [7, 7] []\n[\"c\"]\nhello monk 1 high hey! neg\ntrue false true true\nwall floor neg ? 60\n\
+         [P { x: 0, y: 0 }, P { x: 1, y: 1 }] ['z']\nno newline|\n"
+    );
+    assert_eq!(errout, "to stderr\n");
+}
+
+#[test]
+fn args_read_line_and_poll_key() {
+    let src = r#"
+        fn main() {
+            print(args().len())
+            loop {
+                match read_line() {
+                    Some(l) => print("[{l}]"),
+                    None => break,
+                }
+            }
+            print(poll_key())
+            print(term_cols() > 0 && term_rows() > 0)
+        }
+    "#;
+    assert_eq!(run_with_input(src, "lines", b"hello\r\nworld\n\nlast"), "1\n[hello]\n[world]\n[]\n[last]\n-1\ntrue\n");
 }

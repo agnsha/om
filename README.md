@@ -91,8 +91,11 @@ Read the full [design document](docs/design.md).
 
 ## Install
 
-You need [Rust](https://rustup.rs) (stable) and a C compiler (`cc`, `gcc` or
-`clang`) for linking. Om builds on Linux and macOS (x86-64 and ARM64).
+You need [Rust](https://rustup.rs) (stable) and a C compiler for linking:
+`cc`, `gcc` or `clang` on Linux and macOS (x86-64 and ARM64), or the Visual
+Studio Build Tools on Windows (x86-64). **On Windows, follow the
+[Windows guide](docs/windows.md)**: it works straight from PowerShell, no WSL
+needed, and covers a prebuilt `om.exe`.
 
 ```sh
 git clone https://github.com/agnsha/om
@@ -191,6 +194,19 @@ See [`examples/modern.om`](examples/modern.om) and the [language reference](docs
 
 See the [language reference](docs/language.md), the [`examples/`](examples) folder, and the
 [Rust parity checklist](docs/rust-parity.md) for what is done and what is next.
+
+## Games written in Om
+
+Two complete terminal games, each with notes on what the language made hard
+(most of which has since been fixed in the compiler):
+
+- [Emberdeep](games/emberdeep): a first-person descent by lantern light, drawn
+  with a true-colour raycaster, with baked shadows, procedural textures,
+  billboard sprites and creatures that hunt you in the dark.
+  `om run games/emberdeep/emberdeep.om`
+- [The Hollow Bell](games/hollow-bell): a stealth roguelike where sound
+  travels through the halls and you fight by composing spoken spells.
+  `om run games/hollow-bell/hollow_bell.om`
 
 ## How the compiler works
 

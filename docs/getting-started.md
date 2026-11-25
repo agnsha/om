@@ -3,8 +3,10 @@
 ## Requirements
 
 - Rust stable (install with [rustup](https://rustup.rs))
-- A C compiler for linking: `cc`, `gcc` or `clang`. Set `CC` to choose one.
-- Linux or macOS, x86-64 or ARM64
+- A C compiler for linking: `cc`, `gcc` or `clang`, or on Windows the Visual
+  Studio Build Tools (found automatically). Set `CC` to choose one.
+- Linux or macOS (x86-64 or ARM64), or Windows (x86-64). Windows users: see
+  [the Windows guide](windows.md) for step-by-step setup in PowerShell.
 
 ## Install
 

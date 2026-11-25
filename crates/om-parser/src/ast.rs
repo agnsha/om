@@ -93,6 +93,9 @@ pub struct StructDef {
     pub name: String,
     pub generics: Vec<String>,
     pub fields: Vec<(String, TypeExpr)>,
+    /// A default value for each field (`oil: f64 = 100.0`), used when a struct
+    /// literal leaves the field out.
+    pub defaults: Vec<Option<Expr>>,
     pub span: Span,
 }
 
@@ -226,6 +229,10 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    pub fn is_comparison(self) -> bool {
+        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+    }
+
     pub fn symbol(self) -> &'static str {
         match self {
             BinOp::Add => "+",

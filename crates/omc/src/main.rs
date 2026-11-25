@@ -265,13 +265,34 @@ fn cmd_run(args: &[String]) -> i32 {
     }
 }
 
+fn windows_exception(code: u32) -> String {
+    let what = match code {
+        0xC000_0005 => "access violation",
+        0xC000_00FD => "stack overflow",
+        0xC000_0094 => "integer division by zero",
+        0xC000_0095 => "integer overflow",
+        0xC000_001D => "illegal instruction",
+        0xC000_013A => "stopped with Ctrl+C",
+        _ => "exception",
+    };
+    format!("{what}, code {code:#010X}")
+}
+
 fn exit_code(s: std::process::ExitStatus) -> i32 {
     #[cfg(unix)]
     if let Some(sig) = std::os::unix::process::ExitStatusExt::signal(&s) {
         eprintln!("error: the program was killed by signal {sig}");
         return 128 + sig;
     }
-    s.code().unwrap_or(1)
+    match s.code() {
+        // Windows reports crashes as exception codes such as 0xC0000005.
+        Some(c) if cfg!(windows) && (c as u32) >= 0xC000_0000 => {
+            eprintln!("error: the program crashed ({})", windows_exception(c as u32));
+            1
+        }
+        Some(c) => c,
+        None => 1,
+    }
 }
 
 fn cmd_check(args: &[String]) -> i32 {

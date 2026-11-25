@@ -564,16 +564,18 @@ impl Parser {
         let generics = self.generics()?;
         self.expect(T::LBrace)?;
         let mut fields = Vec::new();
+        let mut defaults = Vec::new();
         while !self.at(&T::RBrace) {
             let (f, _) = self.ident()?;
             self.expect(T::Colon)?;
             fields.push((f, self.ty()?));
+            defaults.push(if self.eat(&T::Eq) { Some(self.expr()?) } else { None });
             if !self.eat(&T::Comma) {
                 break;
             }
         }
         let end = self.expect(T::RBrace)?;
-        Ok(StructDef { name, generics, fields, span: start.to(end) })
+        Ok(StructDef { name, generics, fields, defaults, span: start.to(end) })
     }
 
     fn enum_def(&mut self) -> PResult<EnumDef> {
@@ -1088,7 +1090,9 @@ impl Parser {
                         span: self.peek().span,
                     });
                 }
-                if self.at(&T::LParen) {
+                // As with `[`, a `(` that starts a line begins a new expression
+                // instead of calling the name on the line before.
+                if self.at(&T::LParen) && !self.line_start() {
                     let args = self.args()?;
                     return Ok(Expr { kind: ExprKind::Call(path, args), span: span.to(self.prev_span()) });
                 }
@@ -1453,6 +1457,18 @@ mod tests {
         assert_eq!(f.body.stmts.len(), 4);
         assert!(matches!(&f.body.stmts[0], Stmt::Let { pat, .. } if pat.kind == PatKind::Bind("i".into(), true)));
         assert!(matches!(f.body.stmts[3], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn paren_on_a_new_line_starts_a_new_expression() {
+        let src = "fn f(a: i64, b: i64) -> (i64, i64) {
+            let w = a * b
+            (w, b)
+        }";
+        let f = &parse(src).unwrap().functions[0];
+        assert_eq!(f.body.stmts.len(), 1);
+        assert!(matches!(&f.body.tail.as_ref().unwrap().kind, ExprKind::Tuple(_)));
+        assert!(parse("fn main() { g(1,\n 2) }").is_ok());
     }
 
     #[test]

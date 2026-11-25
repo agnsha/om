@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,17 +43,45 @@ jobs:
       - name: Test
         run: cargo test --locked --all
       - name: Run examples
+        shell: bash
         run: |
           for f in examples/*.om; do
             echo "== $f"
             cargo run -q --locked --bin om -- run "$f"
           done
       - name: Examples are formatted and pass om check
+        shell: bash
         run: |
           for f in examples/*.om; do
             cargo run -q --locked --bin om -- fmt --check "$f"
             cargo run -q --locked --bin om -- check "$f"
           done
+
+  # On Windows, also check the commands a beginner types in PowerShell.
+  windows-powershell:
+    name: Windows PowerShell install and run
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install om and run programs from PowerShell
+        shell: powershell
+        run: |
+          cargo install --locked --path crates/omc
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          om --version
+          om run examples/hello.om
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          om build examples/fib.om -o fib.exe
+          .\fib.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # The game reads keys from stdin when it is not a console: start a seeded game and quit.
+          $out = "s42`nllllckaom`n`nQyxq" | om run games/hollow-bell/hollow_bell.om | Out-String
+          if ($out -notmatch "Depth 1/6") { Write-Output $out; exit 1 }
+          Write-Output "The Hollow Bell runs on Windows"
 
   audit:
     name: Dependency audit
