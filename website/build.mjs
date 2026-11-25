@@ -177,18 +177,19 @@ function head(title, desc, here) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#06070b">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(desc)}">
 <link rel="icon" href="${rel(here, "img/om-mark.svg")}" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${css}">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="top">
-  <a class="logo" href="${rel(here, "index.html")}"><i></i>Om</a>
+  <a class="logo" href="${rel(here, "index.html")}"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="16" cy="16" r="15" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1" stroke-dasharray="1 3"/></svg>Om</a>
   <nav aria-label="Main">
     <a href="${rel(here, "install.html")}">Install</a>
     <a href="${rel(here, "getting-started.html")}">Get started</a>
@@ -250,12 +251,30 @@ ${FOOT}`;
 
 // ---------- home page ----------
 
+const SIGIL = `<svg class="sigil" viewBox="0 0 400 400" aria-hidden="true" focusable="false">
+  <defs>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#b6ff3b" stop-opacity=".55"/><stop offset=".55" stop-color="#b6ff3b" stop-opacity=".06"/><stop offset="1" stop-color="#b6ff3b" stop-opacity="0"/></radialGradient>
+  </defs>
+  <circle cx="200" cy="200" r="190" fill="url(#core)"/>
+  <g class="orb o1"><ellipse cx="200" cy="200" rx="180" ry="62" fill="none" stroke="#6ee7ff" stroke-opacity=".45" stroke-width="1"/><circle cx="380" cy="200" r="4" fill="#6ee7ff"/></g>
+  <g class="orb o2"><ellipse cx="200" cy="200" rx="150" ry="150" fill="none" stroke="#b6ff3b" stroke-opacity=".35" stroke-width="1" stroke-dasharray="2 9"/><circle cx="200" cy="50" r="3" fill="#b6ff3b"/></g>
+  <g class="orb o3"><ellipse cx="200" cy="200" rx="62" ry="176" fill="none" stroke="#e8ecf4" stroke-opacity=".18" stroke-width="1"/></g>
+  <g class="ticks" stroke="#e8ecf4" stroke-opacity=".35">${Array.from({ length: 60 }, (_, i) => {
+    const a = (i / 60) * Math.PI * 2, r1 = i % 5 ? 112 : 104, r2 = 118;
+    return `<line x1="${(200 + Math.cos(a) * r1).toFixed(1)}" y1="${(200 + Math.sin(a) * r1).toFixed(1)}" x2="${(200 + Math.cos(a) * r2).toFixed(1)}" y2="${(200 + Math.sin(a) * r2).toFixed(1)}"/>`;
+  }).join("")}</g>
+  <circle cx="200" cy="200" r="46" fill="none" stroke="#b6ff3b" stroke-width="14"/>
+  <circle cx="200" cy="200" r="46" fill="none" stroke="#06070b" stroke-width="2" stroke-dasharray="1 23"/>
+</svg>`;
+
+const ARROW = `<svg class="ar" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>`;
+
 function home() {
   const here = "index.html";
   const tab = (id, label, sel) => `<button role="tab" id="t-${id}" aria-controls="p-${id}" aria-selected="${sel}" type="button">${label}</button>`;
   const panel = (id, lang, code, note, hidden) =>
     `<div role="tabpanel" id="p-${id}" aria-labelledby="t-${id}"${hidden ? " hidden" : ""}><div class="code"><div class="bar"><b>${lang}</b><button class="copy" type="button">Copy</button></div><pre><code>${highlightShell(code)}</code></pre></div><p class="note">${note}</p></div>`;
-  const card = (href, kicker, title, text) => `<a class="card" href="${href}"><small>${kicker}</small><b>${title}</b><span>${text}</span></a>`;
+  const path_ = (href, title, text, size) => `<li><a href="${href}"><b>${title}</b><span>${text}</span><em>${size}</em>${ARROW}</a></li>`;
   const hello = `fn fib(n: i64) -> i64 {
     if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }
@@ -267,31 +286,37 @@ fn main() {
 }`;
   return `${head("Om: how to use the Om programming language", "Install Om, write your first program, learn the language and its tools. Om is a compiled systems language with Rust's memory model and less to write.", here)}
 <main id="main">
-<section class="hero band">
+<section class="hero">
   <div class="wrap hero-grid">
-    <div>
-      <p class="eyebrow">The Om programming language</p>
-      <h1>Learn to write Om<span>A compiled systems language with Rust's ownership model, no garbage collector, no lifetime annotations, and less to type.</span></h1>
+    <div class="hero-copy">
+      <h1>Native code,<br>no garbage collector,<br><span class="sig">less to write.</span></h1>
+      <p class="lede">Om is a compiled systems language with Rust's ownership model and no lifetime annotations. This site shows you how to install it, write your first program and learn the whole language.</p>
       <div class="cta">
-        <a class="btn p" href="install.html">Install Om</a>
+        <a class="btn p" href="install.html">Install Om ${ARROW}</a>
         <a class="btn" href="getting-started.html">Your first program</a>
       </div>
-      <p class="status">Early and experimental. Everything on this site runs on today's compiler unless it is marked <span class="badge review">in review</span> or <span class="badge planned">planned</span>.</p>
+      <p class="status">Early and experimental. Everything here runs on today's compiler unless it is marked <span class="badge review">in review</span> or <span class="badge planned">planned</span>.</p>
     </div>
-    <div class="term">
-      <div class="bar"><b>hello.om</b></div>
-      <pre><code>${highlightOm(hello)}</code></pre>
-      <pre class="out"><code><span class="pr">$</span> om run hello.om
+    <div class="hero-art">
+      ${SIGIL}
+      <div class="term">
+        <div class="bar"><b>hello.om</b><span>compiled with Cranelift</span></div>
+        <pre><code>${highlightOm(hello)}</code></pre>
+        <pre class="out"><code><span class="pr">$</span> om run hello.om
 Hello, Om!
 fib(20) = 6765</code></pre>
+      </div>
     </div>
   </div>
 </section>
 
-<section class="band alt" id="install">
-  <div class="wrap">
-    <h2>Install in a few minutes</h2>
-    <p>Om is built from source for now. You need <a href="https://rustup.rs" rel="noopener">Rust</a>, Git and a C compiler for linking. The repository is private, so cloning needs a GitHub account with access.</p>
+<section class="band" id="install">
+  <div class="wrap split">
+    <div>
+      <h2>Install in a few minutes</h2>
+      <p>Om is built from source for now. You need <a href="https://rustup.rs" rel="noopener">Rust</a>, Git and a C compiler for linking. The repository is private, so cloning needs a GitHub account with access.</p>
+      <p><a class="more" href="install.html">Full install guide ${ARROW}</a></p>
+    </div>
     <div class="tabs" data-tabs>
       <div role="tablist" aria-label="Operating system">${tab("linux", "Linux", true)}${tab("mac", "macOS", false)}${tab("win", "Windows", false)}</div>
       ${panel("linux", "Shell", `# Debian / Ubuntu (Fedora: sudo dnf install gcc git)
@@ -301,41 +326,41 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 git clone ${REPO}
 cd om
 cargo install --path crates/omc
-om run examples/hello.om`, `Full steps and troubleshooting: <a href="install.html#linux">Install on Linux</a>.`, false)}
+om run examples/hello.om`, `Troubleshooting: <a href="install.html#linux">Install on Linux</a>.`, false)}
       ${panel("mac", "Shell", `xcode-select --install          # clang and git
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 git clone ${REPO}
 cd om
 cargo install --path crates/omc
-om run examples/hello.om`, `Full steps: <a href="install.html#macos">Install on macOS</a>.`, true)}
+om run examples/hello.om`, `Details: <a href="install.html#macos">Install on macOS</a>.`, true)}
       ${panel("win", "PowerShell", `# Today: run Om inside WSL
 wsl --install                   # as administrator, then restart
-# open the Ubuntu app and follow the Linux steps`, `On main today, Windows uses WSL. Native PowerShell support (no WSL) is <span class="badge review">in review</span>: see <a href="windows.html">Om on Windows</a>.`, true)}
+# open the Ubuntu app and follow the Linux steps`, `On main today, Windows uses WSL. Native PowerShell support is <span class="badge review">in review</span>: see <a href="windows.html">Om on Windows</a>.`, true)}
     </div>
   </div>
 </section>
 
 <section class="band" id="learn">
   <div class="wrap">
-    <h2>Pick a way to learn</h2>
-    <div class="cards">
-      ${card("getting-started.html", "10 minutes", "Getting started", "Write, run and build your first program, and read your first compiler error.")}
-      ${card("om-card.html", "Language tour", "Om in one page", "The whole language on one page. Small enough to paste into an AI assistant.")}
-      ${card("book/index.html", "11 chapters", "The Om Book", "From hello to ownership, traits and generics. Start here if you're new.")}
-      ${card("by-example/index.html", "18 programs", "Om by Example", "Short, complete programs, one topic each, with their real output.")}
-      ${card("exercises/index.html", "12 exercises", "Exercises", "Small broken programs to fix. Learn by getting the compiler to say yes.")}
-      ${card("om-for-rust.html", "One page", "Om for Rust programmers", "Already know Rust? Every difference that matters.")}
-    </div>
+    <h2>Pick a way in</h2>
+    <ul class="paths">
+      ${path_("getting-started.html", "Getting started", "Write, run and build your first program, and read your first compiler error.", "10 min")}
+      ${path_("om-card.html", "Om in one page", "The whole language on one page. Small enough to paste into an AI assistant.", "1 page")}
+      ${path_("book/index.html", "The Om Book", "From hello to ownership, traits and generics. Start here if you're new.", "11 chapters")}
+      ${path_("by-example/index.html", "Om by Example", "Short, complete programs, one topic each, with their real output.", "18 programs")}
+      ${path_("exercises/index.html", "Exercises", "Small broken programs to fix. Learn by getting the compiler to say yes.", "12 exercises")}
+      ${path_("om-for-rust.html", "Om for Rust programmers", "Already know Rust? Every difference that matters.", "1 page")}
+    </ul>
   </div>
 </section>
 
-<section class="band alt" id="tools">
-  <div class="wrap two">
+<section class="band" id="tools">
+  <div class="wrap split">
     <div>
       <h2>One command does it all</h2>
-      <p>The <code>om</code> command compiles your code to a native executable through Cranelift. There is no interpreter and no virtual machine.</p>
-      <p><a class="more" href="tools.html">All commands and flags</a></p>
+      <p>The <code>om</code> command compiles your code to a native executable through Cranelift. There is no interpreter and no virtual machine in between.</p>
+      <p><a class="more" href="tools.html">All commands and flags ${ARROW}</a></p>
     </div>
     <div class="code"><div class="bar"><b>Shell</b></div><pre><code>${highlightShell(`om run   app.om          # compile and run
 om build app.om -o app   # standalone executable
@@ -343,12 +368,12 @@ om check app.om          # type-check only, fastest`)}</code></pre></div>
   </div>
 </section>
 
-<section class="band" id="games">
+<section class="band games" id="games">
   <div class="wrap">
     <h2>Two games written in Om <span class="badge review">in review</span></h2>
     <p>Emberdeep, a first-person 3D descent drawn in the terminal, and The Hollow Bell, a stealth roguelike of sound and spoken spells. Each is one Om file of a couple of thousand lines.</p>
     <a class="shot" href="games.html"><img src="img/emberdeep-ember.png" alt="Emberdeep: ember light on a brick corridor" loading="lazy"><img src="img/emberdeep-gate.png" alt="Emberdeep: the open gate" loading="lazy"><img src="img/emberdeep-hound.png" alt="Emberdeep: a hound in the caves" loading="lazy"></a>
-    <p><a class="more" href="games.html">How to run and play them</a></p>
+    <p><a class="more" href="games.html">How to run and play them ${ARROW}</a></p>
   </div>
 </section>
 </main>
