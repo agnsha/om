@@ -69,7 +69,8 @@ pub fn parse(src: &str) -> PResult<Program> {
             T::Enum => prog.enums.push(p.enum_def()?),
             T::Impl => prog.impls.push(p.impl_block()?),
             T::Const => prog.consts.push(p.const_def()?),
-            _ => return p.error("`fn`, `struct`, `enum`, `impl` or `const`"),
+            T::Trait => prog.traits.push(p.trait_def()?),
+            _ => return p.error("`fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
         }
     }
     Ok(prog)
@@ -176,19 +177,62 @@ impl Parser {
         Ok(TypeExpr { name, args, span: span.to(self.prev_span()) })
     }
 
-    /// Optional generic parameter list: `[T, U]`.
+    /// Optional generic parameter list without bounds: `[T, U]`.
     fn generics(&mut self) -> PResult<Vec<String>> {
-        let mut out = Vec::new();
+        let (names, bounds) = self.bounded_generics()?;
+        if let Some(b) = bounds.first() {
+            return Err(ParseError {
+                message: "put trait bounds on the `impl` or `fn` that needs them, not on the type".into(),
+                span: b.span,
+            });
+        }
+        Ok(names)
+    }
+
+    /// Optional generic parameter list with bounds: `[T: Show + Eq, U]`.
+    fn bounded_generics(&mut self) -> PResult<(Vec<String>, Vec<Bound>)> {
+        let mut names = Vec::new();
+        let mut bounds = Vec::new();
         if self.eat(&T::LBracket) {
             while !self.at(&T::RBracket) {
-                out.push(self.ident()?.0);
+                let (name, _) = self.ident()?;
+                if self.eat(&T::Colon) {
+                    self.bound_list(&name, &mut bounds)?;
+                }
+                names.push(name);
                 if !self.eat(&T::Comma) {
                     break;
                 }
             }
             self.expect(T::RBracket)?;
         }
-        Ok(out)
+        Ok((names, bounds))
+    }
+
+    /// `A + B + C` after `T:`.
+    fn bound_list(&mut self, param: &str, out: &mut Vec<Bound>) -> PResult<()> {
+        loop {
+            let (trait_name, span) = self.ident()?;
+            out.push(Bound { param: param.to_string(), trait_name, span });
+            if !self.eat(&T::Plus) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Optional `where T: A + B, U: C` before a body.
+    fn where_clause(&mut self, out: &mut Vec<Bound>) -> PResult<()> {
+        if self.eat(&T::Where) {
+            while !self.at(&T::LBrace) {
+                let (name, _) = self.ident()?;
+                self.expect(T::Colon)?;
+                self.bound_list(&name, out)?;
+                if !self.eat(&T::Comma) {
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Run `f` with struct literals allowed again (inside parentheses, blocks, arguments).
@@ -210,9 +254,14 @@ impl Parser {
     // ---------- items ----------
 
     fn function(&mut self) -> PResult<Function> {
+        self.function_in(false)
+    }
+
+    /// Parse a function. In a trait, the body may be left out.
+    fn function_in(&mut self, in_trait: bool) -> PResult<Function> {
         let start = self.expect(T::Fn)?;
         let (name, _) = self.ident()?;
-        let generics = self.generics()?;
+        let (generics, mut bounds) = self.bounded_generics()?;
         self.expect(T::LParen)?;
         let mut params = Vec::new();
         while !self.at(&T::RParen) {
@@ -223,8 +272,15 @@ impl Parser {
         }
         self.expect(T::RParen)?;
         let ret = if self.eat(&T::Arrow) { Some(self.ty()?) } else { None };
+        self.where_clause(&mut bounds)?;
+        if in_trait && !self.at(&T::LBrace) {
+            self.eat(&T::Semi);
+            let span = start.to(self.prev_span());
+            let body = Block { stmts: vec![], tail: None, span };
+            return Ok(Function { name, generics, bounds, params, ret, body, has_body: false, span });
+        }
         let body = self.block()?;
-        Ok(Function { name, generics, params, ret, span: start.to(body.span), body })
+        Ok(Function { name, generics, bounds, params, ret, span: start.to(body.span), body, has_body: true })
     }
 
     fn param(&mut self) -> PResult<Param> {
@@ -320,15 +376,36 @@ impl Parser {
 
     fn impl_block(&mut self) -> PResult<ImplBlock> {
         let start = self.expect(T::Impl)?;
-        let generics = self.generics()?;
-        let ty = self.ty()?;
+        let (generics, mut bounds) = self.bounded_generics()?;
+        let mut ty = self.ty()?;
+        let mut trait_name = None;
+        if self.eat(&T::For) {
+            if !ty.args.is_empty() || ty.name == TypeExpr::TUPLE {
+                return Err(ParseError { message: "expected a trait name before `for`".into(), span: ty.span });
+            }
+            trait_name = Some((ty.name.clone(), ty.span));
+            ty = self.ty()?;
+        }
+        self.where_clause(&mut bounds)?;
         self.expect(T::LBrace)?;
         let mut methods = Vec::new();
         while self.at(&T::Fn) {
             methods.push(self.function()?);
         }
         let end = self.expect(T::RBrace)?;
-        Ok(ImplBlock { generics, ty, methods, span: start.to(end) })
+        Ok(ImplBlock { generics, bounds, trait_name, ty, methods, span: start.to(end) })
+    }
+
+    fn trait_def(&mut self) -> PResult<TraitDef> {
+        let start = self.expect(T::Trait)?;
+        let (name, _) = self.ident()?;
+        self.expect(T::LBrace)?;
+        let mut methods = Vec::new();
+        while self.at(&T::Fn) {
+            methods.push(self.function_in(true)?);
+        }
+        let end = self.expect(T::RBrace)?;
+        Ok(TraitDef { name, methods, span: start.to(end) })
     }
 
     fn const_def(&mut self) -> PResult<ConstDef> {

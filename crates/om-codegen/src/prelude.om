@@ -99,3 +99,67 @@ impl[T, E] Result[T, E] {
         }
     }
 }
+
+// ---------- comparison ----------
+
+enum Ordering { Less, Equal, Greater }
+
+/// `==` and `!=`.
+trait Eq {
+    fn eq(&self, other: &Self) -> bool
+    fn ne(&self, other: &Self) -> bool { !self.eq(&other) }
+}
+
+/// `<`, `<=`, `>` and `>=`, through `cmp`.
+trait Ord {
+    fn cmp(&self, other: &Self) -> Ordering
+    fn max(self, other: Self) -> Self { match self.cmp(&other) { Ordering::Less => other, _ => self } }
+    fn min(self, other: Self) -> Self { match self.cmp(&other) { Ordering::Greater => other, _ => self } }
+    fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
+}
+
+impl Eq for Ordering { fn eq(&self, other: &Ordering) -> bool { (self as i64) == (other as i64) } }
+impl Eq for i64 { fn eq(&self, other: &i64) -> bool { self == other } }
+impl Eq for f64 { fn eq(&self, other: &f64) -> bool { self == other } }
+impl Eq for bool { fn eq(&self, other: &bool) -> bool { self == other } }
+
+impl Ord for i64 {
+    fn cmp(&self, other: &i64) -> Ordering {
+        if self < other { Ordering::Less } else if self > other { Ordering::Greater } else { Ordering::Equal }
+    }
+}
+impl Ord for f64 {
+    fn cmp(&self, other: &f64) -> Ordering {
+        if self < other { Ordering::Less } else if self > other { Ordering::Greater } else { Ordering::Equal }
+    }
+}
+
+// ---------- arithmetic operators ----------
+
+trait Add { fn add(self, other: Self) -> Self }
+trait Sub { fn sub(self, other: Self) -> Self }
+trait Mul { fn mul(self, other: Self) -> Self }
+trait Div { fn div(self, other: Self) -> Self }
+trait Rem { fn rem(self, other: Self) -> Self }
+trait Neg { fn neg(self) -> Self }
+
+impl Add for i64 { fn add(self, other: i64) -> i64 { self + other } }
+impl Sub for i64 { fn sub(self, other: i64) -> i64 { self - other } }
+impl Mul for i64 { fn mul(self, other: i64) -> i64 { self * other } }
+impl Div for i64 { fn div(self, other: i64) -> i64 { self / other } }
+impl Rem for i64 { fn rem(self, other: i64) -> i64 { self % other } }
+impl Neg for i64 { fn neg(self) -> i64 { -self } }
+impl Add for f64 { fn add(self, other: f64) -> f64 { self + other } }
+impl Sub for f64 { fn sub(self, other: f64) -> f64 { self - other } }
+impl Mul for f64 { fn mul(self, other: f64) -> f64 { self * other } }
+impl Div for f64 { fn div(self, other: f64) -> f64 { self / other } }
+impl Neg for f64 { fn neg(self) -> f64 { -self } }
+
+// ---------- defaults ----------
+
+trait Default { fn default() -> Self }
+
+impl Default for i64 { fn default() -> i64 { 0 } }
+impl Default for f64 { fn default() -> f64 { 0.0 } }
+impl Default for bool { fn default() -> bool { false } }
+impl Default for str { fn default() -> str { "" } }

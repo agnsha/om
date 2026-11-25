@@ -114,6 +114,7 @@ See [`examples/modern.om`](examples/modern.om) and the [language reference](docs
 
 - Types: `i64`, `f64`, `bool`, `str` (string literals), tuples, structs and enums
 - Generic functions, structs, enums and `impl` blocks, monomorphized like Rust
+- Traits with default methods, bounds and `where` clauses; operator overloading through `Add`, `Eq`, `Ord` and friends
 - `Option[T]` and `Result[T, E]` with `?`, `unwrap`, `expect`, `unwrap_or` and more
 - `if let`, `while let`, and destructuring `let (a, b) = ...`
 - `panic`, `assert`, and a Rust-style exit code 101 on panic
@@ -158,7 +159,7 @@ The compiler is written in Rust and split into small crates. See
 | 0.5 | Default and named arguments, `\|>`, string interpolation, `defer` | ✅ done |
 | 1 | Loops, `f64`, structs, methods, enums, `match`, `&`/`&mut` parameters | ✅ done |
 | 2 | Generics, `Option`/`Result` and `?`, tuples, `if let`/`while let`, panics | ✅ done |
-| 2.5 | Traits and bounds, more integer types, `char`, arrays, loop labels | next |
+| 2.5 | Traits, bounds, operator overloading; then more integer types, `char`, arrays, loop labels | in progress |
 | 3 | Heap types (`String`, `Vec`, `Box`), move checking, closures, iterators | planned |
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
 | 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |

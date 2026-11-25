@@ -37,7 +37,7 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use om_lexer::Span;
 use om_parser::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Types and functions every Om program can use without importing them.
@@ -104,6 +104,26 @@ impl fmt::Display for Ty {
 }
 
 impl Ty {
+    /// The name methods and trait impls are filed under: `i64`, `Point`, `Option`.
+    fn key(&self) -> Option<String> {
+        match self {
+            Ty::I64 => Some("i64".into()),
+            Ty::F64 => Some("f64".into()),
+            Ty::Bool => Some("bool".into()),
+            Ty::Str => Some("str".into()),
+            Ty::Struct(n, _) | Ty::Enum(n, _) => Some(n.clone()),
+            _ => None,
+        }
+    }
+
+    /// Type arguments of a struct or enum type.
+    fn args(&self) -> &[Ty] {
+        match self {
+            Ty::Struct(_, a) | Ty::Enum(_, a) => a,
+            _ => &[],
+        }
+    }
+
     /// The name of a struct or enum type, without type arguments.
     fn base(&self) -> Option<&str> {
         match self {
@@ -132,6 +152,8 @@ type Vals = Vec<Value>;
 
 /// Generic parameter names and field types of a struct definition.
 type StructShape = (Vec<String>, Vec<(String, TypeExpr)>);
+/// Type parameters, bounds and type of a trait impl.
+type ImplShape = (Vec<String>, Vec<Bound>, TypeExpr);
 /// Generic parameter names and variant payload types of an enum definition.
 type EnumShape = (Vec<String>, Vec<(String, Vec<TypeExpr>)>);
 
@@ -154,6 +176,8 @@ struct FnDef {
     f: Function,
     /// For methods: the `impl` block's type parameters and type.
     impl_generics: Vec<String>,
+    /// Bounds on the impl's type parameters.
+    impl_bounds: Vec<Bound>,
     impl_ty: Option<TypeExpr>,
 }
 
@@ -199,6 +223,7 @@ pub fn compile_to_object(program: &Program) -> CResult<Vec<u8>> {
     all.enums.extend(program.enums.iter().cloned());
     all.impls.extend(program.impls.iter().cloned());
     all.consts.extend(program.consts.iter().cloned());
+    all.traits.extend(program.traits.iter().cloned());
     let program = &all;
 
     let mut flags = settings::builder();
@@ -220,9 +245,22 @@ pub fn compile_to_object(program: &Program) -> CResult<Vec<u8>> {
         structs: HashMap::new(),
         enums: HashMap::new(),
         consts: HashMap::new(),
+        traits: HashMap::new(),
+        impls: HashMap::new(),
     };
 
     cg.declare_types(program)?;
+    for t in &program.traits {
+        let mut seen = HashSet::new();
+        for m in &t.methods {
+            if !seen.insert(&m.name) {
+                return err(format!("trait `{}` declares `{}` twice", t.name, m.name), m.span);
+            }
+        }
+        if cg.traits.insert(t.name.clone(), t.clone()).is_some() {
+            return err(format!("trait `{}` is defined twice", t.name), t.span);
+        }
+    }
     for c in &program.consts {
         let ty = cg.resolve(&c.ty, &Subst::new())?;
         match const_type(&c.value) {
@@ -236,27 +274,11 @@ pub fn compile_to_object(program: &Program) -> CResult<Vec<u8>> {
     }
 
     for f in &program.functions {
-        cg.add_def(f.name.clone(), FnDef { f: f.clone(), impl_generics: vec![], impl_ty: None }, f.span)?;
+        let def = FnDef { f: f.clone(), impl_generics: vec![], impl_bounds: vec![], impl_ty: None };
+        cg.add_def(f.name.clone(), def, f.span)?;
     }
     for imp in &program.impls {
-        let name = &imp.ty.name;
-        let generics = match (cg.structs.get(name), cg.enums.get(name)) {
-            (Some((g, _)), _) | (_, Some((g, _))) => g.clone(),
-            _ => return err(format!("cannot find struct or enum `{name}` for this `impl`"), imp.ty.span),
-        };
-        let listed: Vec<&str> = imp.ty.args.iter().map(|a| a.name.as_str()).collect();
-        if imp.generics != generics || listed != generics.iter().map(String::as_str).collect::<Vec<_>>() {
-            let want = if generics.is_empty() {
-                format!("impl {name}")
-            } else {
-                format!("impl[{0}] {name}[{0}]", generics.join(", "))
-            };
-            return err(format!("this impl must be written `{want}`"), imp.ty.span);
-        }
-        for m in &imp.methods {
-            let def = FnDef { f: m.clone(), impl_generics: imp.generics.clone(), impl_ty: Some(imp.ty.clone()) };
-            cg.add_def(format!("{name}::{}", m.name), def, m.span)?;
-        }
+        cg.add_impl(imp)?;
     }
     let Some(main) = program.functions.iter().find(|f| f.name == "main") else {
         return err("program has no `fn main()`", Span::default());
@@ -293,12 +315,19 @@ struct Codegen {
     structs: HashMap<String, StructShape>,
     enums: HashMap<String, EnumShape>,
     consts: HashMap<String, (Ty, Expr)>,
+    traits: HashMap<String, TraitDef>,
+    /// Trait impls by (trait, type key): the impl's type parameters, bounds and type.
+    impls: HashMap<(String, String), ImplShape>,
 }
 
 const BUILTINS: &[&str] = &["print", "panic", "assert"];
 
 impl Codegen {
     fn add_def(&mut self, key: String, def: FnDef, span: Span) -> CResult<()> {
+        let generics = def.all_generics();
+        for b in def.impl_bounds.iter().chain(&def.f.bounds) {
+            self.check_bound(b, &generics)?;
+        }
         if BUILTINS.contains(&key.as_str()) {
             return err(format!("`{key}` is a built-in function and cannot be redefined"), span);
         }
@@ -306,6 +335,130 @@ impl Codegen {
             return err(format!("function `{key}` is defined twice"), span);
         }
         Ok(())
+    }
+
+    fn check_bound(&self, b: &Bound, generics: &[String]) -> CResult<()> {
+        if !generics.contains(&b.param) {
+            return err(format!("`{}` is not a type parameter here", b.param), b.span);
+        }
+        if !self.traits.contains_key(&b.trait_name) {
+            return err(format!("cannot find trait `{}`", b.trait_name), b.span);
+        }
+        Ok(())
+    }
+
+    /// Register an inherent or trait `impl` block's methods.
+    fn add_impl(&mut self, imp: &ImplBlock) -> CResult<()> {
+        let name = &imp.ty.name;
+        let builtin = matches!(name.as_str(), "i64" | "f64" | "bool" | "str");
+        let generics = match (self.structs.get(name), self.enums.get(name)) {
+            (Some((g, _)), _) | (_, Some((g, _))) => g.clone(),
+            _ if builtin && imp.trait_name.is_some() => vec![],
+            _ if builtin => {
+                return err(
+                    format!("cannot add methods to built-in type `{name}` directly; implement a trait for it"),
+                    imp.ty.span,
+                )
+            }
+            _ => return err(format!("cannot find struct or enum `{name}` for this `impl`"), imp.ty.span),
+        };
+        let listed: Vec<&str> = imp.ty.args.iter().map(|a| a.name.as_str()).collect();
+        if imp.generics != generics || listed != generics.iter().map(String::as_str).collect::<Vec<_>>() {
+            let tr = imp.trait_name.as_ref().map(|(t, _)| format!("{t} for ")).unwrap_or_default();
+            let want = if generics.is_empty() {
+                format!("impl {tr}{name}")
+            } else {
+                format!("impl[{0}] {tr}{name}[{0}]", generics.join(", "))
+            };
+            return err(format!("this impl must be written `{want}`"), imp.ty.span);
+        }
+        for b in &imp.bounds {
+            self.check_bound(b, &imp.generics)?;
+        }
+        let def = |f: &Function| FnDef {
+            f: f.clone(),
+            impl_generics: imp.generics.clone(),
+            impl_bounds: imp.bounds.clone(),
+            impl_ty: Some(imp.ty.clone()),
+        };
+        let Some((tn, tspan)) = &imp.trait_name else {
+            for m in &imp.methods {
+                self.add_def(format!("{name}::{}", m.name), def(m), m.span)?;
+            }
+            return Ok(());
+        };
+        let Some(tr) = self.traits.get(tn).cloned() else {
+            return err(format!("cannot find trait `{tn}`"), *tspan);
+        };
+        let entry = (imp.generics.clone(), imp.bounds.clone(), imp.ty.clone());
+        if self.impls.insert((tn.clone(), name.clone()), entry).is_some() {
+            return err(format!("`{tn}` is implemented twice for `{name}`"), *tspan);
+        }
+        for m in &imp.methods {
+            let Some(tm) = tr.methods.iter().find(|t| t.name == m.name) else {
+                return err(format!("`{}` is not a method of trait `{tn}`", m.name), m.span);
+            };
+            self.check_impl_sig(tn, tm, m, imp)?;
+            self.add_def(format!("{name}::{}", m.name), def(m), m.span)?;
+        }
+        for tm in &tr.methods {
+            if imp.methods.iter().any(|m| m.name == tm.name) {
+                continue;
+            }
+            if !tm.has_body {
+                return err(format!("missing method `{}` required by trait `{tn}`", tm.name), imp.ty.span);
+            }
+            self.add_def(format!("{name}::{}", tm.name), def(tm), imp.ty.span)?;
+        }
+        Ok(())
+    }
+
+    /// Check that an impl's method has the signature its trait declares (with `Self` = the impl type).
+    fn check_impl_sig(&self, tn: &str, tm: &Function, m: &Function, imp: &ImplBlock) -> CResult<()> {
+        let mut base = Subst::new();
+        for g in &imp.generics {
+            base.insert(g.clone(), Ty::Struct(g.clone(), vec![]));
+        }
+        let self_ty = self.resolve(&imp.ty, &base)?;
+        base.insert("Self".into(), self_ty.clone());
+        let render = |f: &Function, own: &[String]| -> CResult<String> {
+            let mut s = base.clone();
+            for (i, g) in own.iter().enumerate() {
+                s.insert(g.clone(), Ty::Struct(format!("G{i}"), vec![]));
+            }
+            let mut ps = Vec::new();
+            for p in &f.params {
+                let mode = match p.mode {
+                    ParamMode::Value => "",
+                    ParamMode::Ref => "&",
+                    ParamMode::RefMut => "&mut ",
+                };
+                ps.push(match &p.ty {
+                    None => format!("{mode}self"),
+                    Some(t) => format!("{mode}{}", self.resolve(t, &s)?),
+                });
+            }
+            let ret = match &f.ret {
+                Some(t) => format!(" -> {}", self.resolve(t, &s)?),
+                None => String::new(),
+            };
+            let gen = if own.is_empty() { String::new() } else { format!("[{}]", own.len()) };
+            Ok(format!("fn {}{gen}({}){ret}", f.name, ps.join(", ")))
+        };
+        let want = render(tm, &tm.generics)?;
+        let got = render(m, &m.generics)?;
+        if want != got {
+            return err(format!("`{}` does not match trait `{tn}`: expected `{want}`, found `{got}`", m.name), m.span);
+        }
+        Ok(())
+    }
+
+    /// Does `ty` implement trait `tr` (including the bounds of a generic impl)?
+    fn implements(&self, ty: &Ty, tr: &str) -> bool {
+        let Some(k) = ty.key() else { return false };
+        let Some((generics, bounds, _)) = self.impls.get(&(tr.to_string(), k)) else { return false };
+        let s = Codegen::type_subst(generics, ty.args());
+        bounds.iter().all(|b| self.implements(&s[&b.param], &b.trait_name))
     }
 
     fn resolve(&self, t: &TypeExpr, subst: &Subst) -> CResult<Ty> {
@@ -533,6 +686,15 @@ impl Codegen {
             return Ok(inst);
         }
         let def = self.defs[key].clone();
+        for b in def.impl_bounds.iter().chain(&def.f.bounds) {
+            let t = &subst[&b.param];
+            if !self.implements(t, &b.trait_name) {
+                return err(
+                    format!("{t} does not implement `{}`, which `{key}` requires of `{}`", b.trait_name, b.param),
+                    span,
+                );
+            }
+        }
         if let Some(t) = &def.impl_ty {
             let self_ty = self.resolve(t, &subst)?;
             subst.insert("Self".into(), self_ty);
@@ -1233,7 +1395,13 @@ impl<'a> Lower<'a> {
                     (UnOp::Neg, Ty::F64) => Ok((vec![self.b.ins().fneg(v[0])], Ty::F64)),
                     (UnOp::Not, Ty::Bool) => Ok((vec![self.b.ins().bxor_imm_u(v[0], 1)], Ty::Bool)),
                     (_, Ty::Never) => Ok((vec![], Ty::Never)),
-                    (UnOp::Neg, _) => err(format!("cannot negate a {ty}"), e.span),
+                    (UnOp::Neg, _) if self.cg.implements(&ty, "Neg") => {
+                        let a = self.temp_arg(v, ty.clone(), false, e.span)?;
+                        let key = format!("{}::neg", ty.key().unwrap());
+                        let preset = Codegen::type_subst(&self.cg.defs[&key].impl_generics, ty.args());
+                        self.call_fn(&key, &[a], e.span, None, preset)
+                    }
+                    (UnOp::Neg, _) => err(format!("cannot negate {ty}; implement `Neg` for it"), e.span),
                     (UnOp::Not, _) => err(format!("`!` needs a bool, found {ty}"), e.span),
                 }
             }
@@ -1323,6 +1491,9 @@ impl<'a> Lower<'a> {
         if lt != rt {
             return err(format!("mismatched types: {lt} {} {rt} (convert with `as`)", op.symbol()), span);
         }
+        if !matches!(lt, Ty::I64 | Ty::F64 | Ty::Bool) {
+            return self.overloaded(op, lv, lt, rv, span);
+        }
         let ins = self.b.ins();
         let out = match (op, &lt) {
             (BinOp::Add, Ty::I64) => (ins.iadd(lv[0], rv[0]), Ty::I64),
@@ -1362,6 +1533,53 @@ impl<'a> Lower<'a> {
             _ => return err(format!("operator `{}` is not defined for {lt}", op.symbol()), span),
         };
         Ok((vec![out.0], out.1))
+    }
+
+    /// Store `vals` in a fresh variable and return an argument that reads it (as `&` if `by_ref`).
+    fn temp_arg(&mut self, vals: Vals, ty: Ty, by_ref: bool, span: Span) -> CResult<Arg> {
+        let tmp = self.fresh_tmp();
+        self.bind_vals(&tmp, ty, vals, false, span)?;
+        let mut value = Expr { kind: ExprKind::Var(tmp), span };
+        if by_ref {
+            value = Expr { kind: ExprKind::Ref(false, Box::new(value)), span };
+        }
+        Ok(Arg { name: None, value, span })
+    }
+
+    /// An operator on a user type, through the trait that defines it (`Add`, `Eq`, `Ord`, ...).
+    fn overloaded(&mut self, op: BinOp, lv: Vals, ty: Ty, rv: Vals, span: Span) -> CResult<(Vals, Ty)> {
+        let (tr, m, by_ref) = match op {
+            BinOp::Add => ("Add", "add", false),
+            BinOp::Sub => ("Sub", "sub", false),
+            BinOp::Mul => ("Mul", "mul", false),
+            BinOp::Div => ("Div", "div", false),
+            BinOp::Rem => ("Rem", "rem", false),
+            BinOp::Eq | BinOp::Ne => ("Eq", "eq", true),
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => ("Ord", "cmp", true),
+            BinOp::And | BinOp::Or => return err(format!("`{}` needs bools, found {ty}", op.symbol()), span),
+        };
+        if !self.cg.implements(&ty, tr) {
+            return err(format!("operator `{}` is not defined for {ty}; implement `{tr}` for it", op.symbol()), span);
+        }
+        let key = format!("{}::{m}", ty.key().unwrap());
+        let preset = Codegen::type_subst(&self.cg.defs[&key].impl_generics, ty.args());
+        let a = self.temp_arg(lv, ty.clone(), by_ref, span)?;
+        let b = self.temp_arg(rv, ty.clone(), by_ref, span)?;
+        let (v, rt) = self.call_fn(&key, &[a, b], span, None, preset)?;
+        if self.dead {
+            return Ok((vec![], Ty::Never));
+        }
+        let ins = self.b.ins();
+        // Ordering's tag: Less = 0, Equal = 1, Greater = 2.
+        let out = match op {
+            BinOp::Ne => ins.bxor_imm_u(v[0], 1),
+            BinOp::Lt => ins.icmp_imm_s(IntCC::Equal, v[0], 0),
+            BinOp::Le => ins.icmp_imm_s(IntCC::NotEqual, v[0], 2),
+            BinOp::Gt => ins.icmp_imm_s(IntCC::Equal, v[0], 2),
+            BinOp::Ge => ins.icmp_imm_s(IntCC::NotEqual, v[0], 0),
+            _ => return Ok((v, rt)),
+        };
+        Ok((vec![out], Ty::Bool))
     }
 
     fn cast(&mut self, v: Vals, from: Ty, to: Ty, span: Span) -> CResult<(Vals, Ty)> {
@@ -1442,9 +1660,20 @@ impl<'a> Lower<'a> {
 
     /// Replace a leading `Self` in a path with the current `impl` type's name.
     fn self_name(&self, name: &str) -> String {
-        match (name.strip_prefix("Self"), self.subst.get("Self").and_then(|t| t.base())) {
-            (Some(rest), Some(t)) if rest.is_empty() || rest.starts_with("::") => format!("{t}{rest}"),
-            _ => name.to_string(),
+        self.type_path(name).0
+    }
+
+    /// Replace a leading `Self` or type parameter in a path with the concrete type's
+    /// name: `T::default` becomes `i64::default`. Also returns that type.
+    fn type_path(&self, name: &str) -> (String, Option<Ty>) {
+        let (head, rest) = match name.split_once("::") {
+            Some((h, r)) => (h, Some(r)),
+            None if name == "Self" => (name, None),
+            None => return (name.to_string(), None),
+        };
+        match self.subst.get(head).and_then(|t| Some((t.key()?, t))) {
+            Some((k, t)) => (rest.map_or(k.clone(), |r| format!("{k}::{r}")), Some(t.clone())),
+            None => (name.to_string(), None),
         }
     }
 
@@ -1635,7 +1864,7 @@ impl<'a> Lower<'a> {
             "assert" => return self.assert(args, span),
             _ => {}
         }
-        let name = self.self_name(name);
+        let (name, path_ty) = self.type_path(name);
         if let Some(r) = self.variant(&name, args, span, expected)? {
             return Ok(r);
         }
@@ -1654,7 +1883,9 @@ impl<'a> Lower<'a> {
         let mut preset = Subst::new();
         if let Some((ty, _)) = name.split_once("::") {
             let def = &self.cg.defs[&name];
-            if let Some(Ty::Struct(n, a) | Ty::Enum(n, a)) = self.subst.get("Self") {
+            if let Some(t) = path_ty {
+                preset = Codegen::type_subst(&def.impl_generics, t.args());
+            } else if let Some(Ty::Struct(n, a) | Ty::Enum(n, a)) = self.subst.get("Self") {
                 if n == ty {
                     preset = Codegen::type_subst(&def.impl_generics, a);
                 }
@@ -1682,18 +1913,26 @@ impl<'a> Lower<'a> {
                 (Expr { kind: ExprKind::Var(tmp), span: recv.span }, ty)
             }
         };
-        let (Ty::Struct(type_name, targs) | Ty::Enum(type_name, targs)) = &ty else {
-            return err(format!("{ty} has no methods yet (methods on built-in types come with traits)"), span);
+        let Some(type_name) = ty.key() else {
+            return err(format!("{ty} has no methods"), span);
         };
+        let targs = ty.args().to_vec();
         let key = format!("{type_name}::{m}");
         let Some(def) = self.cg.defs.get(&key) else {
-            return err(format!("`{ty}` has no method named `{m}`"), span);
+            let mut traits: Vec<&String> =
+                self.cg.traits.values().filter(|t| t.methods.iter().any(|f| f.name == m)).map(|t| &t.name).collect();
+            traits.sort();
+            let hint = match traits.first() {
+                Some(t) => format!("; trait `{t}` has one, but {ty} does not implement it"),
+                None => String::new(),
+            };
+            return err(format!("{ty} has no method named `{m}`{hint}"), span);
         };
         let self_mode = match def.f.params.first() {
             Some(p) if p.name == "self" => p.mode,
             _ => return err(format!("`{key}` has no `self` parameter; call it as `{key}(...)`"), span),
         };
-        let preset = Codegen::type_subst(&def.impl_generics, targs);
+        let preset = Codegen::type_subst(&def.impl_generics, &targs);
         let self_arg = match self_mode {
             ParamMode::Value => recv_expr,
             ParamMode::Ref => Expr { kind: ExprKind::Ref(false, Box::new(recv_expr)), span: recv.span },

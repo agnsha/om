@@ -1,0 +1,53 @@
+trait Shape {
+    fn area(&self) -> f64
+    fn name(&self) -> str { "shape" }
+    fn describe(&self) { print("{self.name()} with area {self.area()}") }
+}
+
+struct Circle { r: f64 }
+struct Rect { w: f64, h: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 { 3.0 * self.r * self.r }
+    fn name(&self) -> str { "circle" }
+}
+impl Shape for Rect {
+    fn area(&self) -> f64 { self.w * self.h }
+}
+
+fn total[T: Shape](a: T, b: T) -> f64 { a.area() + b.area() }
+
+struct V2 { x: i64, y: i64 }
+impl Add for V2 { fn add(self, o: V2) -> V2 { V2 { x: self.x + o.x, y: self.y + o.y } } }
+impl Neg for V2 { fn neg(self) -> V2 { V2 { x: -self.x, y: -self.y } } }
+impl Eq for V2 { fn eq(&self, o: &V2) -> bool { self.x == o.x && self.y == o.y } }
+impl Ord for V2 {
+    fn cmp(&self, o: &V2) -> Ordering { (self.x * self.x + self.y * self.y).cmp(&(o.x * o.x + o.y * o.y)) }
+}
+
+fn largest[T: Ord](a: T, b: T, c: T) -> T { a.max(b).max(c) }
+fn zero[T: Default]() -> T { T::default() }
+
+struct Wrap[T] { v: T }
+impl[T: Eq] Eq for Wrap[T] { fn eq(&self, o: &Wrap[T]) -> bool { self.v == o.v } }
+
+fn main() {
+    Circle { r: 1.0 }.describe()
+    Rect { w: 2.0, h: 3.0 }.describe()
+    print(total(Rect { w: 1.0, h: 1.0 }, Rect { w: 2.0, h: 2.0 }))
+    let mut p = V2 { x: 1, y: 2 } + V2 { x: 3, y: 4 }
+    p += V2 { x: 1, y: 1 }
+    print(p)
+    print(-p)
+    print(p == V2 { x: 5, y: 7 })
+    print(p != V2 { x: 5, y: 7 })
+    print(V2 { x: 1, y: 0 } < V2 { x: 0, y: 2 })
+    print(largest(3, 9, 4))
+    print(largest(V2 { x: 1, y: 1 }, V2 { x: 5, y: 0 }, V2 { x: 2, y: 2 }))
+    print(7.clamp(0, 5))
+    let z: i64 = zero()
+    let s: str = zero()
+    print("[{z}] [{s}]")
+    print(Wrap { v: 3 } == Wrap { v: 3 })
+    print(2.5.max(1.0))
+}

@@ -75,11 +75,14 @@ works, ⬜ planned.
 |---|---|---|
 | Generic functions, structs, enums and `impl` blocks | ✅ | Monomorphized like Rust; written `f[T]`, `Pair[A, B]` |
 | Type inference for generic calls | 🟡 | From arguments and from the expected type; inference from later uses ⬜ |
-| Traits, `impl Trait for Type`, default methods | ⬜ | |
-| Trait bounds, `where` clauses | ⬜ | |
+| Traits, `impl Trait for Type`, default methods | ✅ | Impls on built-in types (`impl Ord for i64`) and generic types too |
+| Trait bounds `[T: A + B]`, `where` clauses, bounds on generic impls | ✅ | Bounds are checked where a generic is used; generic bodies are checked per instantiation, like C++ templates or Zig, rather than against the bounds alone |
+| `T::assoc_fn()` calls through a type parameter | ✅ | e.g. `T::default()` |
 | Trait objects `dyn Trait` | ⬜ | |
 | Associated types and constants | ⬜ | |
-| Operator overloading (`Add`, `Index`, …) | ⬜ | |
+| Operator overloading | 🟡 | `Add Sub Mul Div Rem Neg` (same type on both sides), `Eq` for `== !=`, `Ord` for `< <= > >=`; `Index` ⬜ |
+| Standard traits `Eq`, `Ord` (with `max`, `min`, `clamp`), `Default`, `Ordering` | ✅ | Om merges `PartialEq`/`Eq` and `PartialOrd`/`Ord` into one trait each |
+| Generic traits (`From[T]`), supertraits | ⬜ | |
 | `#[derive(...)]` | 🟡 | Printing works on any struct or enum with no derive needed |
 | `Option[T]`, `Result[T, E]` and their core methods | ✅ | Written in Om itself (`prelude.om`); more methods arrive with closures |
 | `?` operator | ✅ | On Option and Result; error conversion (`From`) ⬜ |

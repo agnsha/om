@@ -279,8 +279,41 @@ fn pick[T](a: T, b: T, first: bool) -> T { if first { a } else { b } }
 ```
 
 Type arguments are inferred from the arguments and from the expected type
-(`let x: Option[i64] = None`). Trait bounds are not here yet, so a generic
-body can only move its `T` values around, not do arithmetic on them.
+(`let x: Option[i64] = None`). Use trait bounds (below) to say what a `T` must support.
+
+## Traits
+
+A trait lists methods a type must provide; methods with a body are defaults.
+
+```om
+trait Shape {
+    fn area(&self) -> f64
+    fn describe(&self) { print("area {self.area()}") }
+}
+
+struct Rect { w: f64, h: f64 }
+impl Shape for Rect { fn area(&self) -> f64 { self.w * self.h } }
+
+fn total[T: Shape](a: T, b: T) -> f64 { a.area() + b.area() }
+fn show[T](x: T) where T: Shape + Default { x.describe() }
+```
+
+Traits can be implemented for built-in types (`impl Ord for i64`) and for
+generic types, with bounds: `impl[T: Eq] Eq for Wrap[T]`. Inside a generic
+function, `T::name()` calls a function through the type parameter, such as
+`T::default()`.
+
+### Built-in traits and operators
+
+| Trait | Gives you |
+|---|---|
+| `Eq` | `==`, `!=` (`eq`, `ne`) |
+| `Ord` | `<`, `<=`, `>`, `>=` via `cmp(&self, &Self) -> Ordering`, plus `max`, `min`, `clamp` |
+| `Add`, `Sub`, `Mul`, `Div`, `Rem` | `+ - * / %` and their `+=` forms, between two values of the same type |
+| `Neg` | unary `-` |
+| `Default` | `T::default()` |
+
+`i64` and `f64` implement all of these; `bool` implements `Eq` and `Default`.
 
 ## Option, Result and `?`
 

@@ -286,7 +286,7 @@ fn rejects_bad_programs() {
         ("fn main() { let x = 1 + 2.0 }", "mismatched types: i64 + f64"),
         ("struct A { b: B } struct B { a: A } fn main() {}", "contains itself"),
         ("enum E { A(i64) } fn main() { match E::A(1) { E::A(x, y) => 1 } }", "has 1 field(s), but the pattern has 2"),
-        ("fn main() { let x = 1; x.foo() }", "i64 has no methods yet"),
+        ("fn main() { let x = 1; x.foo() }", "i64 has no method named `foo`"),
     ];
     for (src, want) in cases {
         let got = compile_error(src);
@@ -395,6 +395,72 @@ fn rejects_bad_generic_programs() {
         ("fn main() { let (a, b) = (1, 2, 3) }", "tuple of 2"),
         ("fn id[T](x: T) -> T { x } fn main() { let a: bool = id(1) }", "i64"),
         ("struct W[T] { v: T } fn main() { let w: W[i64] = W { v: true } }", "bool"),
+    ];
+    for (src, want) in cases {
+        let got = compile_error(src);
+        assert!(got.contains(want), "for `{src}`\n  expected error containing: {want}\n  got: {got}");
+    }
+}
+
+#[test]
+fn traits_bounds_and_operators() {
+    let src = r#"
+        trait Speak {
+            fn sound(&self) -> str
+            fn speak(&self) { print("says {self.sound()}") }
+        }
+        struct Dog {}
+        struct Cat { loud: bool }
+        impl Speak for Dog { fn sound(&self) -> str { "woof" } }
+        impl Speak for Cat {
+            fn sound(&self) -> str { if self.loud { "MEOW" } else { "meow" } }
+            fn speak(&self) { print("cat {self.sound()}") }
+        }
+        fn twice[T](x: T) where T: Speak { x.speak() x.speak() }
+        struct M { v: i64 }
+        impl Mul for M { fn mul(self, o: M) -> M { M { v: self.v * o.v } } }
+        impl Eq for M { fn eq(&self, o: &M) -> bool { self.v == o.v } }
+        impl Ord for M { fn cmp(&self, o: &M) -> Ordering { self.v.cmp(&o.v) } }
+        fn biggest[T: Ord + Default](a: T, b: T) -> T { if a > b { a } else { b } }
+        fn main() {
+            Dog {}.speak()
+            twice(Cat { loud: true })
+            print(M { v: 3 } * M { v: 4 })
+            print(M { v: 1 } <= M { v: 1 })
+            print(M { v: 2 } >= M { v: 3 })
+            print(M { v: 2 } != M { v: 3 })
+            print(biggest(4, 8))
+            print(M { v: 9 }.min(M { v: 5 }))
+            print(3.cmp(&3))
+            let d: f64 = f64::default()
+            print(d)
+        }
+    "#;
+    assert_eq!(
+        build_and_run(src, "traits"),
+        "says woof\ncat MEOW\ncat MEOW\nM { v: 12 }\ntrue\nfalse\ntrue\n8\nM { v: 5 }\nEqual\n0\n"
+    );
+}
+
+#[test]
+fn rejects_bad_trait_programs() {
+    let cases = [
+        ("trait S { fn f(&self) -> i64 } struct A {} impl S for A {} fn main() {}", "missing method `f`"),
+        (
+            "trait S { fn f(&self) -> i64 } struct A {} impl S for A { fn f(&self) -> bool { true } } fn main() {}",
+            "expected `fn f(&self) -> i64`, found `fn f(&self) -> bool`",
+        ),
+        ("trait S { fn f(&self) } struct A {} impl S for A { fn f(&self) {} fn g(&self) {} } fn main() {}", "`g` is not a method of trait `S`"),
+        ("struct A {} impl Shape for A {} fn main() {}", "cannot find trait `Shape`"),
+        ("fn f[T](x: T) where U: Eq {} fn main() {}", "`U` is not a type parameter"),
+        ("struct A {} fn big[T: Ord](a: T) {} fn main() { big(A {}) }", "A does not implement `Ord`"),
+        ("struct A {} fn main() { let x = A {} == A {} }", "implement `Eq` for it"),
+        ("struct A {} fn main() { A {}.max(A {}) }", "trait `Ord` has one, but A does not implement it"),
+        ("impl i64 { fn f(self) {} } fn main() {}", "implement a trait for it"),
+        (
+            "struct W[T] { v: T } struct A {} impl[T: Eq] Eq for W[T] { fn eq(&self, o: &W[T]) -> bool { true } } fn main() { print(W { v: A {} } == W { v: A {} }) }",
+            "not defined for W[A]",
+        ),
     ];
     for (src, want) in cases {
         let got = compile_error(src);

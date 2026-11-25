@@ -9,6 +9,7 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub impls: Vec<ImplBlock>,
     pub consts: Vec<ConstDef>,
+    pub traits: Vec<TraitDef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,10 +17,30 @@ pub struct Function {
     pub name: String,
     /// Generic type parameters: `fn first[T](...)`.
     pub generics: Vec<String>,
+    /// Trait bounds from `[T: A + B]` and `where T: A`: (type parameter, trait name).
+    pub bounds: Vec<Bound>,
     pub params: Vec<Param>,
     /// `None` means the function returns nothing (unit).
     pub ret: Option<TypeExpr>,
     pub body: Block,
+    /// False for a trait method declared without a body.
+    pub has_body: bool,
+    pub span: Span,
+}
+
+/// `T: Trait` from a generic list or a `where` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bound {
+    pub param: String,
+    pub trait_name: String,
+    pub span: Span,
+}
+
+/// `trait Name { fn required(&self) -> T  fn provided(&self) { ... } }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: Vec<Function>,
     pub span: Span,
 }
 
@@ -93,6 +114,9 @@ pub struct Variant {
 pub struct ImplBlock {
     /// `impl[T] Stack[T]` declares `T`.
     pub generics: Vec<String>,
+    pub bounds: Vec<Bound>,
+    /// `impl Trait for Type`.
+    pub trait_name: Option<(String, Span)>,
     pub ty: TypeExpr,
     pub methods: Vec<Function>,
     pub span: Span,
