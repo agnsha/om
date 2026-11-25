@@ -448,6 +448,29 @@ impl<'a> Lexer<'a> {
                         Some(b'0') => '\0',
                         Some(b'\\') => '\\',
                         Some(b'"') => '"',
+                        Some(b'\'') => '\'',
+                        Some(b'x') => {
+                            // `\x1b`: two hex digits, at most 7F, as in Rust.
+                            let code = self.src.get(self.pos..self.pos + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+                            match code {
+                                Some(b) if b <= 0x7F => {
+                                    self.pos += 2;
+                                    b as char
+                                }
+                                _ => return self.err("invalid `\\x` escape; write two hex digits up to 7F, like `\\x1b`", self.pos - 2),
+                            }
+                        }
+                        Some(b'u') if self.peek(0) == Some(b'{') => {
+                            let close = self.src[self.pos..].find('}').map(|i| self.pos + i);
+                            let code = close.and_then(|e| u32::from_str_radix(&self.src[self.pos + 1..e], 16).ok());
+                            match (close, code.and_then(char::from_u32)) {
+                                (Some(e), Some(ch)) => {
+                                    self.pos = e + 1;
+                                    ch
+                                }
+                                _ => return self.err("invalid unicode escape; write it like `\\u{1F600}`", self.pos - 2),
+                            }
+                        }
                         _ => return self.err("unknown escape sequence", self.pos - 2),
                     });
                 }
@@ -658,6 +681,9 @@ mod tests {
     #[test]
     fn string_escapes() {
         assert_eq!(kinds(r#""a\n\"b\"""#), vec![Str("a\n\"b\"".into()), Eof]);
+        assert_eq!(kinds(r#""\u{1b}[0m \x1b\'\u{1F600}""#), vec![Str("\u{1b}[0m \x1b'\u{1F600}".into()), Eof]);
+        assert!(lex(r#""\x80""#).is_err());
+        assert!(lex(r#""\u{110000}""#).is_err());
     }
 
     #[test]

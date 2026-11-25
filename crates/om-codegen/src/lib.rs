@@ -3626,6 +3626,22 @@ impl<'a> Lower<'a> {
         {
             return self.mem_intrinsic(op, args, span, expected);
         }
+        match (op, args) {
+            ("read_key", []) => {
+                let k = self.rt("om_rt_read_key", &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![k], Ty::Int(IntTy::I64)));
+            }
+            ("time_ns", []) => {
+                let t = self.rt("om_rt_time_ns", &[], Some(types::I64), &[])?.unwrap();
+                return Ok((vec![t], Ty::Int(IntTy::I64)));
+            }
+            ("sleep_ms", [ms]) => {
+                let (v, _) = self.expr_expect(&ms.value, Some(&Ty::Int(IntTy::I64)))?;
+                self.rt("om_rt_sleep_ms", &[types::I64], None, &v)?;
+                return Ok((vec![], Ty::Unit));
+            }
+            _ => {}
+        }
         let mut vals = Vec::new();
         let mut t = Ty::Unit;
         for a in args {
@@ -5006,6 +5022,81 @@ void *om_rt_realloc(void *p, long long size) {
     return p;
 }
 void om_rt_free(void *p) { free(p); }
+/* Terminal input and time. On a terminal, read_key switches to raw mode on first
+   use (no echo, no line buffering) and restores the terminal at exit. Arrow keys
+   come back as 1000 (up), 1001 (down), 1002 (right), 1003 (left); end of input is -1. */
+#ifdef _WIN32
+#include <conio.h>
+#include <windows.h>
+long long om_rt_read_key(void) {
+    static int init;
+    fflush(stdout);
+    if (!init) {
+        init = 1;
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode;
+        if (GetConsoleMode(h, &mode)) SetConsoleMode(h, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
+    }
+    if (!_isatty(_fileno(stdin))) { int c = getchar(); return c == EOF ? -1 : c; }
+    int c = _getch();
+    if (c == 0 || c == 0xE0) {
+        switch (_getch()) { case 72: return 1000; case 80: return 1001; case 77: return 1002; case 75: return 1003; default: return 0; }
+    }
+    return c == '\r' ? '\n' : c;
+}
+long long om_rt_time_ns(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    return (long long)((((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 100ULL);
+}
+void om_rt_sleep_ms(long long ms) { fflush(stdout); if (ms > 0) Sleep((DWORD)ms); }
+#else
+#include <poll.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+static struct termios om_saved_tty_;
+static int om_tty_raw_;
+static void om_restore_tty(void) { if (om_tty_raw_) tcsetattr(0, TCSANOW, &om_saved_tty_); }
+static int om_getc(int wait_ms) {
+    if (wait_ms >= 0) {
+        struct pollfd p = { 0, POLLIN, 0 };
+        if (poll(&p, 1, wait_ms) <= 0) return -1;
+    }
+    unsigned char c;
+    return read(0, &c, 1) == 1 ? c : -1;
+}
+long long om_rt_read_key(void) {
+    fflush(stdout);
+    if (!om_tty_raw_ && isatty(0) && tcgetattr(0, &om_saved_tty_) == 0) {
+        struct termios raw = om_saved_tty_;
+        raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        if (tcsetattr(0, TCSANOW, &raw) == 0) { om_tty_raw_ = 1; atexit(om_restore_tty); }
+    }
+    int c = om_getc(-1);
+    if (c == 27 && om_tty_raw_) {
+        int b = om_getc(30);
+        if (b == '[' || b == 'O') {
+            switch (om_getc(30)) { case 'A': return 1000; case 'B': return 1001; case 'C': return 1002; case 'D': return 1003; default: return 0; }
+        }
+        return 27;
+    }
+    return c == '\r' ? '\n' : c;
+}
+long long om_rt_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+void om_rt_sleep_ms(long long ms) {
+    fflush(stdout);
+    if (ms <= 0) return;
+    struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+#endif
 void om_rt_memmove(void *dst, const void *src, long long n) { if (n > 0) memmove(dst, src, (size_t)n); }
 int om_rt_memcmp(const void *a, const void *b, long long n) { return n > 0 ? memcmp(a, b, (size_t)n) : 0; }
 "#;

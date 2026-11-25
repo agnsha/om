@@ -782,6 +782,19 @@ impl Ord for String {
 
 impl Default for String { fn default() -> String { String::new() } }
 
+// ---------- terminal and time ----------
+
+// Wait for one key press and return it: a byte such as 'a' as i64, '\n' for
+// Enter, 1000..=1003 for the arrow keys (up, down, right, left), or -1 at the
+// end of input. On a terminal, keys are not echoed and need no Enter.
+fn read_key() -> i64 { intrinsic::read_key() }
+
+// Nanoseconds since 1970 (wall clock), for timing and random seeds.
+fn time_ns() -> i64 { intrinsic::time_ns() }
+
+// Flush output and pause for `ms` milliseconds.
+fn sleep_ms(ms: i64) { intrinsic::sleep_ms(ms) }
+
 // ---------- Box ----------
 
 /// A value stored on the heap. `*b` reaches the value; fields and methods
