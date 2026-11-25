@@ -12,7 +12,7 @@ works, ⬜ planned.
 | Functions, recursion, early `return` | ✅ | |
 | `let`, `let mut`, type annotations, shadowing | ✅ | |
 | Block expressions, `if`/`else` as expressions | ✅ | |
-| `while`, `loop`, `for` | 🟡 | `for` runs over integer ranges (`0..n`, `0..=n`); iterators come with traits |
+| `while`, `loop`, `for` | 🟡 | `for` over ranges, `for x in &list` and `for x in list`; `for x in &mut list` and general iterators ⬜ |
 | `break`, `continue`, `break value` from `loop`, loop labels | ✅ | |
 | Compound assignment `+= -= *= /= %=` | ✅ | |
 | Integer types `i8`…`i64`, `u8`…`u64`, `isize`, `usize` | ✅ | `i128`/`u128` ⬜ |
@@ -40,9 +40,12 @@ works, ⬜ planned.
 | `impl` blocks, methods, associated functions, `Self` | ✅ | |
 | `self`, `&self`, `&mut self`, `mut self` | ✅ | |
 | Tuples `(a, b)`, `.0` indexing, nested tuples | ✅ | |
-| Arrays `[T; N]` and slices | ⬜ | Arrive with the memory model, together with `Vec` |
-| `String`, `Vec<T>`, `HashMap<K, V>`, `Box<T>` | ⬜ | Need the heap and the ownership checker |
-| Recursive types | ⬜ | Need `Box`; rejected with a clear error today |
+| Arrays `[T; N]` and slices | ⬜ | `[a, b]` and `[x; n]` make a `Vec` for now; `str` is Om's string slice |
+| `Vec[T]` | ✅ | Written in Om (`prelude.om`): push, pop, insert, remove, swap_remove, truncate, clear, reverse, sort (stable), dedup, contains, append, get/first/last, `v[i]` with Rust's bounds-check panic, `[a, b]` and `[x; n]` literals |
+| `String` and `str` | ✅ | `str` is a (pointer, length) view like Rust's `&str`; 40+ methods (find, split, trim, replace, lines, chars, bytes, strip_prefix, split_once, ...); `s + "x"`, `s += "x"`; `to_string()` on any value. `to_uppercase` changes ASCII letters only. Parsing is `parse_int()` / `parse_float()` until generic `parse::<T>()` |
+| `Box[T]` | ✅ | `*b` reads, writes and moves out, field access and methods auto-deref |
+| `HashMap<K, V>`, `HashSet`, `VecDeque`, `BTreeMap` | ⬜ | Next batch, with iterators |
+| Recursive types | ✅ | Through `Box` or `Vec` (`enum List { Cons(i64, Box[List]), Nil }`) |
 | Type aliases `type X = Y` | ⬜ | |
 
 ## Pattern matching
@@ -59,7 +62,7 @@ works, ⬜ planned.
 | Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
 | Tuple patterns in `match` | ✅ | |
 | Struct patterns, `..` rest patterns, `@` bindings | ⬜ | |
-| String patterns | ⬜ | |
+| String patterns | ⬜ | Compare with `==` for now |
 
 ## Ownership and references
 
@@ -67,11 +70,12 @@ works, ⬜ planned.
 |---|---|---|
 | `&T` and `&mut T` parameters | ✅ | Mutable value semantics: no lifetimes needed |
 | Aliasing check (`&mut x` twice in one call) | ✅ | |
-| Move semantics and use-after-move errors | ⬜ | Arrives with heap types (`String`, `Vec`), where it matters |
-| `Copy` / `Clone` | ⬜ | Every current type is plain data and copies freely |
-| `Drop` | ⬜ | `defer` covers scope cleanup today |
+| Move semantics and use-after-move errors | ✅ | Including moves in one branch, moves inside loops, moving out of borrowed values, and partial moves of a field |
+| `Copy` / `Clone` | ✅ | Types that own nothing copy implicitly; `.clone()` works on every type (deep copy) unless it implements `Drop`, which needs its own `Clone` impl |
+| `Drop` | ✅ | Runs in Rust's order: locals in reverse, fields in order, list elements front to back, temporaries at the end of the statement; drop flags for values moved on some paths. Checked leak-free with valgrind |
+| Borrow checking | 🟡 | `let r = &x`, `match &x` and `str` views of a String freeze the owner while they live; a view may not outlive its String (returning, storing in an outer variable or a `&mut` list, or pointing into a temporary are errors). This is a conservative stand-in for Rust's lifetimes, not the full NLL checker |
 | References stored in structs, lifetimes | ✖ by design | Om uses regions instead (see design) |
-| Raw pointers and `unsafe` | ⬜ | For C interop |
+| Raw pointers and `unsafe` | 🟡 | `Ptr[T]` and memory intrinsics exist for the standard library; user-facing `unsafe` ⬜ |
 
 ## Abstraction
 

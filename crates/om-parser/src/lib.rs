@@ -60,7 +60,8 @@ type PResult<T> = Result<T, ParseError>;
 /// Lex and parse a whole Om source file.
 pub fn parse(src: &str) -> PResult<Program> {
     let tokens = lex(src)?;
-    let mut p = Parser { tokens, pos: 0, no_struct: false, label: None };
+    let nl = newlines_before(src, &tokens);
+    let mut p = Parser { tokens, nl, pos: 0, no_struct: false, label: None, tmp: 0 };
     let mut prog = Program::default();
     while !p.at(&T::Eof) {
         match p.peek().kind {
@@ -83,6 +84,100 @@ struct Parser {
     no_struct: bool,
     /// A `'label:` waiting for the loop that follows it.
     label: Option<String>,
+    /// Counter for names of hidden variables made while desugaring.
+    tmp: usize,
+    /// For each token, whether a line break comes before it.
+    nl: Vec<bool>,
+}
+
+/// Which tokens start a new line. A statement may end at a line break, so an
+/// operator that can also start an expression (`*`, `-`, `&`, `[`) does not
+/// continue the previous line.
+fn newlines_before(src: &str, tokens: &[Token]) -> Vec<bool> {
+    let mut prev_end = 0;
+    tokens
+        .iter()
+        .map(|t| {
+            let start = t.span.start.min(src.len()).max(prev_end);
+            let nl = src.get(prev_end..start).is_some_and(|gap| gap.contains('\n'));
+            prev_end = t.span.end.min(src.len()).max(prev_end);
+            nl
+        })
+        .collect()
+}
+
+impl Parser {
+    /// Is the next token the first on its line?
+    fn line_start(&self) -> bool {
+        self.nl.get(self.pos).copied().unwrap_or(false)
+    }
+
+    /// `for PAT in &list { body }` visits each element by reference, and
+    /// `for PAT in list { body }` takes each element out of the list:
+    ///
+    /// ```text
+    /// { let $c = &list; let mut $i = 0
+    ///   loop { if $i >= $c.len() { break }; let PAT = &$c[$i]; $i += 1; body } }
+    /// { let mut $c = list; $c.reverse()
+    ///   loop { match $c.pop() { Some(PAT) => body, None => break } } }
+    /// ```
+    fn for_each(&mut self, pat: Pattern, iter: Expr, body: Block, label: Option<String>, start: Span) -> PResult<Stmt> {
+        self.tmp += 1;
+        let (c, i) = (format!("$for{}", self.tmp), format!("$fori{}", self.tmp));
+        let span = start.to(body.span);
+        let e = |kind: ExprKind| Expr { kind, span };
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
+        let bind = |n: &str, m: bool| Pattern { kind: PatKind::Bind(n.to_string(), m), span };
+        let brk = || Block { stmts: vec![Stmt::Break { label: None, value: None, span }], tail: None, span };
+        let call = |recv: Expr, m: &str| Expr { kind: ExprKind::MethodCall(Box::new(recv), m.into(), vec![]), span };
+        let (setup, lp) = match iter.kind {
+            ExprKind::Ref(false, list) => {
+                let usize_ty = TypeExpr { name: "usize".into(), args: vec![], span };
+                let setup = vec![
+                    Stmt::Let { pat: bind(&c, false), ty: None, value: e(ExprKind::Ref(false, list)), span },
+                    Stmt::Let { pat: bind(&i, true), ty: Some(usize_ty), value: e(ExprKind::Int(0)), span },
+                ];
+                let done = e(ExprKind::Binary(BinOp::Ge, Box::new(var(&i)), Box::new(call(var(&c), "len"))));
+                let elem = e(ExprKind::Index(Box::new(var(&c)), Box::new(var(&i))));
+                let mut stmts = vec![
+                    Stmt::Expr(e(ExprKind::If(Box::new(done), brk(), None))),
+                    Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), span },
+                    Stmt::Assign { target: var(&i), op: Some(BinOp::Add), value: e(ExprKind::Int(1)), span },
+                ];
+                stmts.push(Stmt::Expr(e(ExprKind::Block(body))));
+                (setup, Block { stmts, tail: None, span })
+            }
+            ExprKind::Ref(true, _) => {
+                let message = "`for x in &mut list` is not supported yet; loop over indexes: `for i in 0..list.len() { list[i] ... }`";
+                return Err(ParseError { message: message.into(), span: iter.span });
+            }
+            _ => {
+                let setup = vec![
+                    Stmt::Let { pat: bind(&c, true), ty: None, value: iter, span },
+                    Stmt::Expr(call(var(&c), "reverse")),
+                ];
+                let arms = vec![
+                    Arm {
+                        pat: Pattern { kind: PatKind::Variant("Some".into(), vec![pat]), span },
+                        guard: None,
+                        body: e(ExprKind::Block(body)),
+                        span,
+                    },
+                    Arm {
+                        pat: Pattern { kind: PatKind::Wild, span },
+                        guard: None,
+                        body: e(ExprKind::Block(brk())),
+                        span,
+                    },
+                ];
+                let m = e(ExprKind::Match(Box::new(call(var(&c), "pop")), arms));
+                (setup, Block { stmts: vec![Stmt::Expr(m)], tail: None, span })
+            }
+        };
+        let mut stmts = setup;
+        stmts.push(Stmt::Expr(e(ExprKind::Loop(lp, label))));
+        Ok(Stmt::Expr(e(ExprKind::Block(Block { stmts, tail: None, span }))))
+    }
 }
 
 fn is_upper(name: &str) -> bool {
@@ -510,7 +605,7 @@ impl Parser {
             T::For => {
                 self.bump();
                 let label = self.label.take();
-                let (var, _) = self.ident()?;
+                let pat = self.pattern()?;
                 self.expect(T::In)?;
                 let range_start = self.header_expr()?;
                 let inclusive = if self.eat(&T::DotDotEq) {
@@ -518,7 +613,18 @@ impl Parser {
                 } else if self.eat(&T::DotDot) {
                     false
                 } else {
-                    return self.error("`..` or `..=` (`for` loops currently run over integer ranges)");
+                    let body = self.block()?;
+                    return self.for_each(pat, range_start, body, label, start);
+                };
+                let var = match pat.kind {
+                    PatKind::Bind(name, false) => name,
+                    PatKind::Wild => "_".to_string(),
+                    _ => {
+                        return Err(ParseError {
+                            message: "a range loop binds one name, like `for i in 0..n`".into(),
+                            span: pat.span,
+                        })
+                    }
                 };
                 let end = self.header_expr()?;
                 let body = self.block()?;
@@ -597,6 +703,9 @@ impl Parser {
                 lhs = pipe(lhs, rhs)?;
                 continue;
             }
+            if matches!(self.peek().kind, T::Star | T::Minus | T::Amp) && self.line_start() {
+                return Ok(lhs);
+            }
             let (op, prec) = match self.peek().kind {
                 T::OrOr => (BinOp::Or, 1),
                 T::AndAnd => (BinOp::And, 2),
@@ -644,8 +753,12 @@ impl Parser {
     fn prefix(&mut self) -> PResult<Expr> {
         let start = self.peek().span;
         let kind = match self.peek().kind {
-            T::Minus | T::Bang => {
-                let op = if self.bump().kind == T::Minus { UnOp::Neg } else { UnOp::Not };
+            T::Minus | T::Bang | T::Star => {
+                let op = match self.bump().kind {
+                    T::Minus => UnOp::Neg,
+                    T::Bang => UnOp::Not,
+                    _ => UnOp::Deref,
+                };
                 let inner = self.prefix()?;
                 ExprKind::Unary(op, Box::new(inner))
             }
@@ -667,6 +780,14 @@ impl Parser {
                 let end = self.bump().span;
                 let span = e.span.to(end);
                 e = Expr { kind: ExprKind::Try(Box::new(e)), span };
+                continue;
+            }
+            if self.at(&T::LBracket) && !self.line_start() {
+                self.bump();
+                let index = self.nested(|p| p.expr())?;
+                let end = self.expect(T::RBracket)?;
+                let span = e.span.to(end);
+                e = Expr { kind: ExprKind::Index(Box::new(e), Box::new(index)), span };
                 continue;
             }
             if !self.eat(&T::Dot) {
@@ -765,6 +886,25 @@ impl Parser {
             T::Char(c) => {
                 self.bump();
                 ExprKind::Char(c)
+            }
+            T::LBracket => {
+                self.bump();
+                let mut items = Vec::new();
+                let kind = self.nested(|p| {
+                    while !p.at(&T::RBracket) {
+                        items.push(p.expr()?);
+                        if items.len() == 1 && p.eat(&T::Semi) {
+                            let count = p.expr()?;
+                            return Ok(ExprKind::ListRepeat(Box::new(items.pop().unwrap()), Box::new(count)));
+                        }
+                        if !p.eat(&T::Comma) {
+                            break;
+                        }
+                    }
+                    Ok(ExprKind::List(std::mem::take(&mut items)))
+                })?;
+                let end = self.expect(T::RBracket)?;
+                return Ok(Expr { kind, span: span.to(end) });
             }
             T::Str(s) => {
                 self.bump();
@@ -1082,7 +1222,8 @@ fn interp_part(part: StrPart) -> PResult<InterpPart> {
             for t in &mut tokens {
                 t.span = Span::new(t.span.start + offset, t.span.end + offset);
             }
-            let mut p = Parser { tokens, pos: 0, no_struct: false, label: None };
+            let nl = vec![false; tokens.len()];
+            let mut p = Parser { tokens, nl, pos: 0, no_struct: false, label: None, tmp: 0 };
             let e = p.expr()?;
             if !p.at(&T::Eof) {
                 return p.error("`}` to end the interpolation");

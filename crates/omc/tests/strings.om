@@ -1,0 +1,73 @@
+fn shout(s: str) -> String { s.to_uppercase() }
+
+fn strings() {
+    let mut s = String::from("hello")
+    s.push_str(", world")
+    s.push('!')
+    print(s)
+    print(s.len())
+    print(s.contains("world"))
+    print(s.find("o"))
+    print(shout(&s))
+    let n = 42
+    let t = "n is {n} and s is {s}"
+    print(t)
+    print(t.len())
+    print(5.to_string())
+    print((1, "a").to_string())
+    print("  pad  ".trim())
+    print("a,b,,c".split(","))
+    print("héllo".chars())
+    print(s.pop())
+    print(s)
+    print("abc" == "abc")
+    print("abc" < "abd")
+    print(String::from("x") == String::from("x"))
+    print("12".parse_int())
+    print("-9x".parse_int())
+    print("2.5".parse_float())
+    print("ab".repeat(3))
+    print("a-b-c".replace("-", "+"))
+    let words = "the quick  brown fox".split_whitespace()
+    print(words)
+    print(words.len())
+    let c = s.clone()
+    print(c)
+    let mut u = String::new()
+    for i in 0..3 { u.push_str("{i};") }
+    print(u)
+    print("k=v".split_once("="))
+    print(s.slice(0, 5))
+}
+
+fn loops() {
+    let v = [1, 2, 3]
+    let mut sum = 0
+    for x in &v { sum += x }
+    print(sum)
+    for (i, w) in &[(0, "a"), (1, "b")] { print("{i}{w}") }
+    let names = [String::from("ann"), String::from("bo")]
+    for n in &names { print(n.len()) }
+    print(names)
+    for n in names { print("own {n}") }
+    let ns = [N { id: 1 }, N { id: 2 }, N { id: 3 }]
+    for n in ns {
+        if n.id == 2 { break }
+        print("see {n.id}")
+    }
+    print("after")
+    'outer: for c in "ab".chars() {
+        for d in "xy".chars() {
+            if d == 'y' { continue 'outer }
+            print("{c}{d}")
+        }
+    }
+}
+
+struct N { id: i64 }
+impl Drop for N { fn drop(&mut self) { print("drop {self.id}") } }
+
+fn main() {
+    strings()
+    loops()
+}

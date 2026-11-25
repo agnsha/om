@@ -88,7 +88,20 @@ fn cmd_run(args: &[String]) -> i32 {
     let status = Command::new(&out).args(&args[1..]).status();
     let _ = std::fs::remove_file(&out);
     match status {
-        Ok(s) => s.code().unwrap_or(1),
+        Ok(s) => match s.code() {
+            Some(c) => c,
+            None => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(sig) = s.signal() {
+                        eprintln!("error: the program was killed by signal {sig}");
+                        return 128 + sig;
+                    }
+                }
+                1
+            }
+        },
         Err(e) => {
             eprintln!("error: could not start the program: {e}");
             1
