@@ -97,6 +97,9 @@ impl Diagnostic {
     }
 }
 
+/// Most diagnostics one run reports.
+pub const MAX_DIAGNOSTICS: usize = 400;
+
 /// Largest source file the compiler reads (16 MiB).
 pub const MAX_SOURCE_BYTES: u64 = 16 << 20;
 
@@ -177,6 +180,7 @@ fn analyze_inner(src: &str, emit: bool) -> Analysis {
     let mut seen = std::collections::HashSet::new();
     diags.retain(|d| seen.insert((d.message.clone(), d.span.map(|s| (s.start, s.end)))));
     diags.sort_by_key(|d| (!d.is_error(), d.span.map_or(0, |s| s.start)));
+    diags.truncate(MAX_DIAGNOSTICS);
     let ctx = suggest::Context::new(src, &program);
     for d in &mut diags {
         suggest::enrich(d, &ctx);

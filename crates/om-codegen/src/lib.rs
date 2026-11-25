@@ -407,6 +407,8 @@ pub struct Compiled {
 /// Most generic instances one program may create. A generic function that calls
 /// itself with a bigger type would otherwise make the compiler run forever.
 pub const MAX_INSTANCES: usize = 20_000;
+/// Most errors one compile reports; past this the rest are noise.
+pub const MAX_ERRORS: usize = 200;
 /// Most scalars one value may flatten into (see "Value representation").
 pub const MAX_TYPE_WIDTH: usize = 1 << 10;
 /// Deepest nesting of type arguments and fields, as in Rust's recursion limit.
@@ -582,6 +584,9 @@ fn compile_inner(
             errors.push(e);
             cg.module.clear_context(&mut ctx);
             fctx = FunctionBuilderContext::new();
+            if errors.len() >= MAX_ERRORS {
+                break;
+            }
         }
         cg.cur_origin = None;
     }
