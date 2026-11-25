@@ -201,7 +201,7 @@ const buildCurves = (florets: number, seed: number) => {
       p = add(p, mul(d, L / 44))
       pts.push(p)
     }
-    curves.push({ pts, kind: 1, w: 0.008, t: 0, lat: [1, 0, 0], twist: 0, bulb: r() > 0.6, phase: r() * 6, stagger: 0.35 + r() * 0.4, base: centre })
+    curves.push({ pts, kind: 1, w: 0.011, t: 0, lat: [1, 0, 0], twist: 0, bulb: r() > 0.6, phase: r() * 6, stagger: 0.35 + r() * 0.4, base: centre })
   }
 
   // the scape: short and stout, faintly bowed
@@ -379,22 +379,23 @@ type Key = {
   stem: number
 }
 
+// Desktop: the flower is the hero, big and off to the side of the type.
 const KEYS: Key[] = [
-  { spin: 0.2, el: 9, size: 0.86, ox: 0, oy: 0.3, stem: 1 },
-  { spin: 1.4, el: 88, size: 0.58, ox: 0, oy: 0, stem: 0 },
-  { spin: 2.3, el: 12, size: 0.27, ox: 0, oy: 0.4, stem: 0.3 },
-  { spin: 3.1, el: -30, size: 0.86, ox: 0, oy: -0.34, stem: 0.06 },
-  { spin: 4.1, el: 16, size: 1.02, ox: 0.66, oy: 0.2, stem: 1 },
-  { spin: 5.0, el: -74, size: 0.86, ox: 0, oy: 1.02, stem: 0.04 },
+  { spin: 0.2, el: 8, size: 1.15, ox: 0.48, oy: 0.1, stem: 1 },
+  { spin: 1.4, el: 86, size: 0.66, ox: 0, oy: 0, stem: 0 },
+  { spin: 2.3, el: 12, size: 0.34, ox: 0, oy: 0.36, stem: 0.3 },
+  { spin: 3.1, el: -26, size: 1.25, ox: 0, oy: -0.42, stem: 0.06 },
+  { spin: 4.1, el: 16, size: 1.45, ox: 0.6, oy: 0.1, stem: 1 },
+  { spin: 5.0, el: -70, size: 1.1, ox: 0, oy: 0.95, stem: 0.04 },
 ]
-// Portrait stages move the flower rather than squeezing the type.
+// Phone: the flower fills the screen behind the type instead of sitting beside it.
 const KEYS_TALL: Partial<Key>[] = [
-  { size: 0.9, oy: 0.36 },
-  { size: 0.56 },
-  { size: 0.34, oy: 0.44 },
-  { size: 0.95, oy: -0.2 },
-  { size: 0.86, ox: 0.5, oy: 0.46 },
-  { size: 0.96, oy: 1.0 },
+  { size: 1.45, ox: 0, oy: 0.18 },
+  { size: 0.46 },
+  { size: 0.5, ox: 0, oy: 0.5 },
+  { size: 1.5, oy: -0.1 },
+  { size: 1.4, ox: 0.2, oy: 0.42 },
+  { size: 1.35, oy: 0.9 },
 ]
 const SCENES = KEYS.length
 const HOLD = 0.34
@@ -510,6 +511,7 @@ precision highp float;
 uniform vec3 u_eye;
 uniform vec3 u_red;
 uniform vec3 u_hot;
+uniform vec3 u_glow;
 uniform float u_alpha;
 varying vec3 v_n;
 varying vec3 v_w;
@@ -534,6 +536,7 @@ void main() {
   col += u_hot * pow(e, 3.0) * 0.3;
   col += u_red * fr * 1.1;
   col *= 0.8 + 0.2 * smoothstep(0.0, 0.25, v_s);
+  col += u_glow * (fr * 2.2 + pow(e, 2.0) * 0.25 + 0.06);
   col = col / (1.0 + col);
   col = pow(col, vec3(1.0 / 2.2));
   gl_FragColor = vec4(col * u_alpha, u_alpha);
@@ -632,6 +635,7 @@ export default function LycorisSpecimen({
   const stageRef = React.useRef<HTMLDivElement | null>(null)
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
   const glowRef = React.useRef<HTMLDivElement | null>(null)
+  const hazeRef = React.useRef<HTMLCanvasElement | null>(null)
   const wordRef = React.useRef<HTMLDivElement | null>(null)
   const [reduced, setReduced] = React.useState(false)
   const [active, setActive] = React.useState(0)
@@ -669,14 +673,15 @@ export default function LycorisSpecimen({
   }, [fontHref])
 
   const tint = flower ?? crimson
-  const look = React.useRef({ crimson: tint, alive, reduced, florets, seed })
-  look.current = { crimson: tint, alive, reduced, florets, seed }
+  const look = React.useRef({ crimson: tint, glow: crimson, alive, reduced, florets, seed })
+  look.current = { crimson: tint, glow: crimson, alive, reduced, florets, seed }
 
   React.useEffect(() => {
     const root = rootRef.current
     const stage = stageRef.current
     const canvas = canvasRef.current
     const glow = glowRef.current
+    const haze = hazeRef.current
     const word = wordRef.current
     if (!root || !stage || !canvas || !glow || !word) return
 
@@ -727,7 +732,7 @@ export default function LycorisSpecimen({
       attr("a_nrm", 3, 3)
       attr("a_aux", 4, 6)
       attr("a_base", 3, 10)
-      for (const n of ["u_vp", "u_model", "u_offset", "u_time", "u_bloom", "u_sway", "u_stem", "u_eye", "u_red", "u_hot", "u_alpha"])
+      for (const n of ["u_vp", "u_model", "u_offset", "u_time", "u_bloom", "u_sway", "u_stem", "u_eye", "u_red", "u_hot", "u_glow", "u_alpha"])
         loc[n] = gl.getUniformLocation(prog, n)
       gl.enable(gl.DEPTH_TEST)
       gl.clearColor(0, 0, 0, 0)
@@ -757,12 +762,16 @@ export default function LycorisSpecimen({
       const sr = stage.getBoundingClientRect()
       W = Math.max(1, sr.width)
       H = Math.max(1, sr.height)
-      dpr = Math.min(window.devicePixelRatio || 1, 2)
+      dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1.5), 2)
       const cw = Math.round(W * dpr)
       const ch = Math.round(H * dpr)
       if (canvas.width !== cw || canvas.height !== ch) {
         canvas.width = cw
         canvas.height = ch
+      }
+      if (haze) {
+        haze.width = Math.max(1, Math.round(W / 6))
+        haze.height = Math.max(1, Math.round(H / 6))
       }
       const saved = chars.map((c) => c.style.transform)
       chars.forEach((c) => (c.style.transform = "none"))
@@ -893,8 +902,20 @@ export default function LycorisSpecimen({
         g.uniform3f(loc.u_eye, eye[0], eye[1], eye[2])
         g.uniform3f(loc.u_red, red[0] * 2.2, red[1] * 2.2, red[2] * 2.2)
         g.uniform3f(loc.u_hot, 1, 0.55 + red[1], 0.5 + red[2])
+        const gc = hexToLinear(L.glow)
+        g.uniform3f(loc.u_glow, gc[0] * 1.1, gc[1] * 1.1, gc[2] * 1.1)
         g.uniform1f(loc.u_alpha, 1)
         g.drawElements(g.TRIANGLES, mesh.index.length, g.UNSIGNED_SHORT, 0)
+        // the blurred double behind everything: a small copy, scaled up and drifting with scroll
+        if (haze) {
+          const hx = haze.getContext("2d")
+          if (hx) {
+            hx.clearRect(0, 0, haze.width, haze.height)
+            hx.drawImage(canvas, 0, 0, haze.width, haze.height)
+          }
+          const drift = (coord - 2.5) * -0.12 * H
+          haze.style.transform = "translate3d(" + (-k.ox * W * 0.25).toFixed(1) + "px," + drift.toFixed(1) + "px,0) scale(" + (tall ? 1.9 : 1.6) + ") rotate(" + (coord * 6).toFixed(2) + "deg)"
+        }
       } else if (ctx2d) {
         // No WebGL: the same curves, projected and stroked.
         const c = ctx2d
@@ -1107,12 +1128,19 @@ export default function LycorisSpecimen({
               "radial-gradient(120% 90% at 50% 45%, transparent 55%, " + bone + "14 100%)",
           }}
         />
+        <canvas
+          ref={hazeRef}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 block"
+          style={{ width: "100%", height: "100%", maxWidth: "none", filter: "blur(28px) saturate(1.6) brightness(1.5)", opacity: 0.75, willChange: "transform" }}
+        />
         <div
           ref={glowRef}
           aria-hidden
           className="pointer-events-none absolute left-0 top-0 rounded-full"
           style={{
-            background: "radial-gradient(closest-side, " + tint + "3d, " + tint + "12 45%, transparent 100%)",
+            background: "radial-gradient(closest-side, " + crimson + "55, " + crimson + "1c 42%, transparent 100%)",
+            mixBlendMode: "screen",
             willChange: "transform",
           }}
         />
@@ -1120,7 +1148,7 @@ export default function LycorisSpecimen({
           ref={canvasRef}
           aria-hidden
           className="absolute inset-0 block"
-          style={{ width: "100%", height: "100%", maxWidth: "none" }}
+          style={{ width: "100%", height: "100%", maxWidth: "none", filter: "drop-shadow(0 0 14px " + crimson + "80)" }}
         />
 
         {/* ================================ 0 · cover ================================ */}

@@ -42,7 +42,7 @@ if (hero) {
       ink="#06070b"
       bone="#cfc9b0"
       crimson="#b98cff"
-      flower="#231029"
+      flower="#3a1848"
       height="calc(100svh - 64px)"
       florets={7}
       seed={11}
