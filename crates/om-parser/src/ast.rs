@@ -145,7 +145,7 @@ pub struct Block {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    /// `let pattern (: type)? = value`; the pattern must always match (a name or a tuple).
+    /// `let pattern (: type)? = value` or `let pattern = value else { diverge }`.
     Let {
         pat: Pattern,
         ty: Option<TypeExpr>,
@@ -359,6 +359,8 @@ pub enum PatKind {
     CharRange(char, char, bool),
     /// `Shape::Circle(r)` or `Color::Red`
     Variant(String, Vec<Pattern>),
+    /// `Point { x, y: pat }` or `Point { x, .. }`
+    Struct(String, Vec<(String, Pattern)>, bool),
     /// `A | B`
     Or(Vec<Pattern>),
 }

@@ -61,7 +61,7 @@ works, ⬜ planned.
 | `if let`, `while let` | ✅ | `let else` ⬜ |
 | Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
 | Tuple patterns in `match` | ✅ | |
-| Struct patterns, `..` rest patterns, `@` bindings | ⬜ | |
+| Struct patterns, `..` rest patterns | ✅ | `Point { x, y: 0, .. }`; struct-like enum variants and `@` bindings ⬜ |
 | String patterns | ⬜ | Compare with `==` for now |
 
 ## Ownership and references

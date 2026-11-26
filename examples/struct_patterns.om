@@ -1,0 +1,37 @@
+// Struct patterns: destructure structs in `match` and `let`.
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+fn classify(p: Point) -> str {
+    match p {
+        Point { x: 0, y: 0 } => "origin",
+        Point { x, y: 0 } => "x-axis",
+        Point { x: 0, y } => "y-axis",
+        Point { x, y } => "other",
+    }
+}
+
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    let Point { x, y } = p
+    print("x = {x}, y = {y}")
+
+    print(classify(Point { x: 0, y: 0 }))
+    print(classify(Point { x: 5, y: 0 }))
+    print(classify(Point { x: 0, y: 7 }))
+    print(classify(Point { x: 1, y: 2 }))
+
+    // `..` to skip unmentioned fields
+    let c = Color { r: 255u8, g: 128u8, b: 0u8 }
+    let Color { r, .. } = c
+    print("r = {r}")
+}

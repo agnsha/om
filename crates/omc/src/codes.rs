@@ -384,6 +384,12 @@ pub const CODES: &[Code] = &[
         patterns: &["`|` patterns cannot bind names yet"],
         explain: "Alternatives in `A | B` patterns cannot bind variables yet; use separate arms.",
     },
+    Code {
+        code: "E0504",
+        title: "struct pattern fields",
+        patterns: &["pattern does not mention field `$`; use `..` to skip it", "field `$` is bound more than once"],
+        explain: "A struct pattern must name every field, or use `..` to skip the ones you don't need: `Point { x, .. }`.",
+    },
     // ---------- E06xx: mutability and references ----------
     Code {
         code: "E0600",

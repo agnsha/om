@@ -4782,6 +4782,12 @@ impl<'a> Lower<'a> {
                 Ty::Tuple(ts) => subs.iter().zip(ts).any(|(s, t)| self.pat_owns(s, t)),
                 _ => false,
             },
+            PatKind::Struct(_, fields, _) => {
+                let members = self.cg.fields(ty);
+                fields.iter().any(|(fname, sub)| {
+                    members.iter().find(|(n, _)| n == fname).is_some_and(|(_, t)| self.pat_owns(sub, t))
+                })
+            }
             PatKind::Variant(path, subs) => match self.pattern_variant(path, ty, pat.span) {
                 Ok(idx) => {
                     let ftys = self.cg.variants(ty)[idx].1.clone();
@@ -4805,6 +4811,26 @@ impl<'a> Lower<'a> {
                     let w = self.cg.width(t);
                     self.drop_residual(s, t, &vals[off..off + w])?;
                     off += w;
+                }
+                Ok(())
+            }
+            PatKind::Struct(_, fields, _) => {
+                let members = self.cg.fields(ty);
+                for (fname, sub) in fields {
+                    if let Some((ft, off)) = self.cg.field(ty, fname) {
+                        let w = self.cg.width(&ft);
+                        self.drop_residual(sub, &ft, &vals[off..off + w])?;
+                    }
+                }
+                // Fields the pattern skips with `..` are not bound, so drop them here.
+                let bound: std::collections::HashSet<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                for (name, fty) in &members {
+                    if !bound.contains(name.as_str()) {
+                        if let Some((_, off)) = self.cg.field(ty, name) {
+                            let w = self.cg.width(fty);
+                            self.drop_value(&vals[off..off + w], fty)?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -4927,6 +4953,11 @@ impl<'a> Lower<'a> {
             },
             PatKind::Or(alts) => PatKind::Or(alts.iter().map(|a| self.const_pattern(a)).collect()),
             PatKind::Tuple(subs) => PatKind::Tuple(subs.iter().map(|a| self.const_pattern(a)).collect()),
+            PatKind::Struct(name, fields, rest) => PatKind::Struct(
+                name.clone(),
+                fields.iter().map(|(n, p)| (n.clone(), self.const_pattern(p))).collect(),
+                *rest,
+            ),
             k => k.clone(),
         };
         Pattern { kind, span: pat.span }
@@ -4964,6 +4995,27 @@ impl<'a> Lower<'a> {
                         return err("`|` patterns cannot bind names yet", a.span);
                     }
                     self.check_pattern(a, ty)?;
+                }
+                Ok(())
+            }
+            PatKind::Struct(name, fields, rest) => {
+                if !matches!(ty, Ty::Struct(n, _) if n == name) {
+                    return mismatch(&format!("a struct `{name}`"));
+                }
+                let members = self.cg.fields(ty);
+                for (i, (fname, sub)) in fields.iter().enumerate() {
+                    if fields[..i].iter().any(|(n, _)| n == fname) {
+                        return err(format!("field `{fname}` is bound more than once"), sub.span);
+                    }
+                    let Some((_, fty)) = members.iter().find(|(n, _)| n == fname) else {
+                        return err(format!("`{name}` has no field `{fname}`"), pat.span);
+                    };
+                    self.check_pattern(sub, fty)?;
+                }
+                if !rest {
+                    if let Some((mname, _)) = members.iter().find(|(m, _)| !fields.iter().any(|(n, _)| n == m)) {
+                        return err(format!("pattern does not mention field `{mname}`; use `..` to skip it"), pat.span);
+                    }
                 }
                 Ok(())
             }
@@ -5034,6 +5086,10 @@ impl<'a> Lower<'a> {
                 let base = ty.base().unwrap();
                 self.cg.variants(ty).into_iter().map(|(n, f)| (format!("{base}::{n}"), f)).collect()
             }
+            Ty::Struct(..) => {
+                let members = self.cg.fields(ty);
+                vec![(ty.to_string(), members.into_iter().map(|(_, t)| t).collect())]
+            }
             Ty::Tuple(ts) => vec![(String::new(), ts.clone())],
             Ty::Unit => vec![(String::new(), vec![])],
             Ty::Int(_) | Ty::Char => {
@@ -5094,6 +5150,22 @@ impl<'a> Lower<'a> {
                     PatKind::Wild | PatKind::Bind(..) => Some(vec![wild.clone(); ftys.len()]),
                     PatKind::Bool(b) => (b.to_string() == *label).then(Vec::new),
                     PatKind::Tuple(subs) => Some(subs.clone()),
+                    PatKind::Struct(_, fields, _) if matches!(ty, Ty::Struct(..)) => {
+                        // Reorder fields to match the struct definition order,
+                        // filling unmentioned fields with wildcards.
+                        let members = self.cg.fields(ty);
+                        let ordered: Vec<Pattern> = members
+                            .iter()
+                            .map(|(n, _)| {
+                                fields
+                                    .iter()
+                                    .find(|(fn_, _)| fn_ == n)
+                                    .map(|(_, p)| p.clone())
+                                    .unwrap_or_else(|| wild.clone())
+                            })
+                            .collect();
+                        Some(ordered)
+                    }
                     PatKind::Variant(path, subs) => {
                         let idx = self.pattern_variant(path, ty, row[0].span).ok()?;
                         let base = ty.base().unwrap();
@@ -5113,6 +5185,11 @@ impl<'a> Lower<'a> {
                     format!("({})", fields.join(", "))
                 } else if fields.is_empty() {
                     label.clone()
+                } else if matches!(ty, Ty::Struct(..)) {
+                    let members = self.cg.fields(ty);
+                    let pairs: Vec<String> =
+                        members.iter().zip(fields).map(|((n, _), p)| format!("{n}: {p}")).collect();
+                    format!("{label} {{ {} }}", pairs.join(", "))
                 } else {
                     format!("{label}({})", fields.join(", "))
                 };
@@ -5171,6 +5248,19 @@ impl<'a> Lower<'a> {
                 }
                 acc
             }
+            PatKind::Struct(_, fields, _) => {
+                let mut acc = self.b.ins().iconst(types::I8, 1);
+                for (fname, sub) in fields {
+                    if !irrefutable(sub) {
+                        if let Some((ft, off)) = self.cg.field(ty, fname) {
+                            let w = self.cg.width(&ft);
+                            let sub_test = self.pat_test(sub, &ft, &vals[off..off + w])?;
+                            acc = self.b.ins().band(acc, sub_test);
+                        }
+                    }
+                }
+                acc
+            }
             PatKind::Variant(path, subs) => {
                 let idx = self.pattern_variant(path, ty, pat.span)?;
                 let mut acc = self.b.ins().icmp_imm_s(IntCC::Equal, vals[0], idx as i64);
@@ -5201,6 +5291,15 @@ impl<'a> Lower<'a> {
                     let w = self.cg.width(t);
                     self.pat_bind(s, t, &vals[off..off + w], own)?;
                     off += w;
+                }
+                Ok(())
+            }
+            PatKind::Struct(_, fields, _) => {
+                for (fname, sub) in fields {
+                    if let Some((ft, off)) = self.cg.field(ty, fname) {
+                        let w = self.cg.width(&ft);
+                        self.pat_bind(sub, &ft, &vals[off..off + w], own)?;
+                    }
                 }
                 Ok(())
             }
@@ -5565,6 +5664,7 @@ fn irrefutable(p: &Pattern) -> bool {
     match &p.kind {
         PatKind::Wild | PatKind::Bind(..) => true,
         PatKind::Tuple(subs) => subs.iter().all(irrefutable),
+        PatKind::Struct(_, fields, _) => fields.iter().all(|(_, s)| irrefutable(s)),
         PatKind::Or(alts) => alts.iter().any(irrefutable),
         _ => false,
     }
@@ -5574,6 +5674,7 @@ fn has_bindings(p: &Pattern) -> bool {
     match &p.kind {
         PatKind::Bind(..) => true,
         PatKind::Variant(_, subs) | PatKind::Tuple(subs) | PatKind::Or(subs) => subs.iter().any(has_bindings),
+        PatKind::Struct(_, fields, _) => fields.iter().any(|(_, s)| has_bindings(s)),
         _ => false,
     }
 }
