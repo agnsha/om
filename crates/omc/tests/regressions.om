@@ -19,6 +19,10 @@ fn main() {
         print("got {n.id}")
     }
     print(after_return(None))
+    for i in 0..2 {
+        let true = temp_name(i).is_one() else { continue }
+        print("one")
+    }
 }
 struct Tracked { id: i64 }
 impl Drop for Tracked { fn drop(&mut self) { print("drop {self.id}") } }
@@ -30,3 +34,5 @@ fn after_return(o: Option[i64]) -> i64 {
     }
     a
 }
+fn temp_name(i: i64) -> Tracked { Tracked { id: i } }
+impl Tracked { fn is_one(&self) -> bool { self.id == 1 } }

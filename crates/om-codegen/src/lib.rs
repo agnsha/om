@@ -2392,6 +2392,12 @@ impl<'a> Lower<'a> {
                     if own == Own::Owned {
                         self.drop_value(&vals, &vty)?;
                     }
+                    // The else block leaves the statement, so its temporaries must go now too. They stay
+                    // registered: the binding path still drops them at the end of the statement.
+                    let temps = self.temps[temps_mark..].to_vec();
+                    for (v, t) in temps.iter().rev() {
+                        self.drop_value(v, t)?;
+                    }
                     let before = self.moved.clone();
                     self.block_expect(els, None)?;
                     if !self.dead {
