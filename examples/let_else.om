@@ -1,0 +1,17 @@
+// `let else`: bind when the pattern matches, otherwise leave.
+
+fn first_digit(s: str) -> Option[i64] {
+    let Some(c) = s.chars().first() else { return None }
+    let Some(d) = c.to_digit(10) else { return None }
+    Some(d as i64)
+}
+
+fn main() {
+    print(first_digit("7up"))
+    print(first_digit("up7"))
+    let names = ["ada", "bo"]
+    for i in 0..names.len() + 1 {
+        let Some(n) = names.get(i) else { break }
+        print(n)
+    }
+}

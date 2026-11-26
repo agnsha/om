@@ -212,6 +212,15 @@ const LIMIT: i64 = 100
 const PI: f64 = 3.14159
 ```
 
+## Type aliases
+
+```om
+type Score = i64
+type Grid = Vec[Vec[char]]
+```
+
+An alias is another name for the same type, not a new type.
+
 ## Control flow
 
 `if` is an expression. Both branches must have the same type, unless one of
@@ -446,10 +455,15 @@ fn calc(a: i64, b: i64) -> Result[i64, str] {
 let (lo, hi) = min_max(9, 2)
 if let Some(root) = find(49) { print(root) } else { print("none") }
 while let Some(n) = stack { ... }
+let Point { x, y } = p
+let Color { r, .. } = c
+let Some(c) = s.chars().first() else { return None }
 ```
 
-A `let` pattern must always match; use `if let` or `match` for patterns that
-might fail.
+A `let` pattern must always match; use `if let`, `match`, or `let else` for
+patterns that might fail. The `else` of a `let else` must leave with `return`,
+`break`, `continue` or `panic`. A struct pattern names every field, or ends
+with `..` to skip the rest; `x` is short for `x: x`.
 
 ## Ownership, Vec, String and Box
 

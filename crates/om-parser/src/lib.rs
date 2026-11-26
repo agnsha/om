@@ -104,7 +104,8 @@ pub fn parse_all(src: &str) -> (Program, Vec<ParseError>) {
             T::Impl => p.impl_block().map(|i| prog.impls.push(i)),
             T::Const => p.const_def().map(|c| prog.consts.push(c)),
             T::Trait => p.trait_def().map(|t| prog.traits.push(t)),
-            _ => p.error("`fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
+            T::Type => p.type_alias().map(|a| prog.type_aliases.push(a)),
+            _ => p.error("`fn`, `struct`, `enum`, `trait`, `impl`, `const` or `type`"),
         };
         if let Err(e) = item {
             p.errors.push(e);
@@ -188,14 +189,26 @@ pub fn desugar_for_each(pat: Pattern, iter: Expr, body: Block, label: Option<Str
         ExprKind::Ref(false, list) => {
             let usize_ty = TypeExpr { name: "usize".into(), args: vec![], span };
             let setup = vec![
-                Stmt::Let { pat: bind(&c, false), ty: None, value: e(ExprKind::Ref(false, list)), span },
-                Stmt::Let { pat: bind(&i, true), ty: Some(usize_ty), value: e(ExprKind::Int(0)), span },
+                Stmt::Let {
+                    pat: bind(&c, false),
+                    ty: None,
+                    value: e(ExprKind::Ref(false, list)),
+                    else_block: None,
+                    span,
+                },
+                Stmt::Let {
+                    pat: bind(&i, true),
+                    ty: Some(usize_ty),
+                    value: e(ExprKind::Int(0)),
+                    else_block: None,
+                    span,
+                },
             ];
             let done = e(ExprKind::Binary(BinOp::Ge, Box::new(var(&i)), Box::new(call(var(&c), "len"))));
             let elem = e(ExprKind::Index(Box::new(var(&c)), Box::new(var(&i))));
             let mut stmts = vec![
                 Stmt::Expr(e(ExprKind::If(Box::new(done), brk(), None))),
-                Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), span },
+                Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), else_block: None, span },
                 Stmt::Assign { target: var(&i), op: Some(BinOp::Add), value: e(ExprKind::Int(1)), span },
             ];
             stmts.push(Stmt::Expr(e(ExprKind::Block(body))));
@@ -203,7 +216,7 @@ pub fn desugar_for_each(pat: Pattern, iter: Expr, body: Block, label: Option<Str
         }
         _ => {
             let setup = vec![
-                Stmt::Let { pat: bind(&c, true), ty: None, value: iter, span },
+                Stmt::Let { pat: bind(&c, true), ty: None, value: iter, else_block: None, span },
                 Stmt::Expr(call(var(&c), "reverse")),
             ];
             let arms = vec![
@@ -294,7 +307,8 @@ impl Parser {
             self.bump();
         }
         while !self.at(&T::Eof) {
-            let item = matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait);
+            let item =
+                matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait | T::Type);
             if item && self.col0.get(self.pos).copied().unwrap_or(false) {
                 return;
             }
@@ -650,6 +664,15 @@ impl Parser {
         Ok(ConstDef { name, ty, span: start.to(value.span), value })
     }
 
+    fn type_alias(&mut self) -> PResult<TypeAlias> {
+        let start = self.expect(T::Type)?;
+        let (name, _) = self.ident()?;
+        self.expect(T::Eq)?;
+        let ty = self.ty()?;
+        self.eat(&T::Semi);
+        Ok(TypeAlias { name, ty: ty.clone(), span: start.to(ty.span) })
+    }
+
     // ---------- statements ----------
 
     fn block(&mut self) -> PResult<Block> {
@@ -703,7 +726,9 @@ impl Parser {
                 let ty = if self.eat(&T::Colon) { Some(self.ty()?) } else { None };
                 self.expect(T::Eq)?;
                 let value = self.expr()?;
-                Ok(Stmt::Let { pat, ty, span: start.to(value.span), value })
+                let else_block = if self.eat(&T::Else) { Some(self.block()?) } else { None };
+                let end = else_block.as_ref().map_or(value.span, |b| b.span);
+                Ok(Stmt::Let { pat, ty, span: start.to(end), value, else_block })
             }
             T::While if self.peek_at(1) == &T::Let => {
                 // `while let P = e { body }` is `loop { match e { P => body, _ => break } }`.
@@ -1347,6 +1372,31 @@ impl Parser {
                     }
                     self.expect(T::RParen)?;
                     PatKind::Variant(path, subs)
+                } else if self.at(&T::LBrace) && (path.contains("::") || is_upper(&path)) {
+                    // Struct pattern: `Point { x, y: pat, .. }`
+                    self.bump(); // eat `{`
+                    let mut fields = Vec::new();
+                    let mut rest = false;
+                    while !self.at(&T::RBrace) {
+                        if self.eat(&T::DotDot) {
+                            rest = true;
+                            self.eat(&T::Comma);
+                            break;
+                        }
+                        let (fname, _) = self.ident()?;
+                        let pat = if self.eat(&T::Colon) {
+                            self.pattern()?
+                        } else {
+                            // Shorthand: `x` means `x: x`
+                            Pattern { kind: PatKind::Bind(fname.clone(), false), span: self.prev_span() }
+                        };
+                        fields.push((fname, pat));
+                        if !self.eat(&T::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(T::RBrace)?;
+                    PatKind::Struct(path, fields, rest)
                 } else if path.contains("::") || is_upper(&path) {
                     PatKind::Variant(path, vec![])
                 } else {

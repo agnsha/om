@@ -384,6 +384,18 @@ pub const CODES: &[Code] = &[
         patterns: &["`|` patterns cannot bind names yet"],
         explain: "Alternatives in `A | B` patterns cannot bind variables yet; use separate arms.",
     },
+    Code {
+        code: "E0504",
+        title: "struct pattern fields",
+        patterns: &["pattern does not mention field `$`; use `..` to skip it", "field `$` is bound more than once"],
+        explain: "A struct pattern must name every field, or use `..` to skip the ones you don't need: `Point { x, .. }`.",
+    },
+    Code {
+        code: "E0505",
+        title: "let else that falls through",
+        patterns: &["the `else` of a `let else` must not finish$"],
+        explain: "In `let P = value else { ... }` the `else` block runs when the pattern does not match, so the names in `P` do not exist after it. It must leave: `return`, `break`, `continue` or `panic(...)`.",
+    },
     // ---------- E06xx: mutability and references ----------
     Code {
         code: "E0600",

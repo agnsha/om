@@ -10,6 +10,14 @@ pub struct Program {
     pub impls: Vec<ImplBlock>,
     pub consts: Vec<ConstDef>,
     pub traits: Vec<TraitDef>,
+    pub type_aliases: Vec<TypeAlias>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAlias {
+    pub name: String,
+    pub ty: TypeExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,11 +153,13 @@ pub struct Block {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    /// `let pattern (: type)? = value`; the pattern must always match (a name or a tuple).
+    /// `let pattern (: type)? = value` or `let pattern = value else { diverge }`.
     Let {
         pat: Pattern,
         ty: Option<TypeExpr>,
         value: Expr,
+        /// `else { return }` block; must diverge (return, break, continue or panic).
+        else_block: Option<Block>,
         span: Span,
     },
     /// `target = value`, or `target += value` when `op` is set.
@@ -359,6 +369,8 @@ pub enum PatKind {
     CharRange(char, char, bool),
     /// `Shape::Circle(r)` or `Color::Red`
     Variant(String, Vec<Pattern>),
+    /// `Point { x, y: pat }` or `Point { x, .. }`
+    Struct(String, Vec<(String, Pattern)>, bool),
     /// `A | B`
     Or(Vec<Pattern>),
 }

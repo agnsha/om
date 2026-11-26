@@ -46,7 +46,7 @@ works, ⬜ planned.
 | `Box[T]` | ✅ | `*b` reads, writes and moves out, field access and methods auto-deref |
 | `HashMap<K, V>`, `HashSet`, `VecDeque`, `BTreeMap` | ⬜ | Next batch, with iterators |
 | Recursive types | ✅ | Through `Box` or `Vec` (`enum List { Cons(i64, Box[List]), Nil }`) |
-| Type aliases `type X = Y` | ⬜ | |
+| Type aliases `type X = Y` | ✅ | Generic aliases `type Pair[T] = (T, T)` ⬜ |
 
 ## Pattern matching
 
@@ -58,10 +58,10 @@ works, ⬜ planned.
 | Or-patterns `A \| B` | 🟡 | Without bindings |
 | Match guards `if cond` | ✅ | |
 | Exhaustiveness checking with a missing-case example | ✅ | Same matrix algorithm family as rustc, including integer and char ranges (`0..=127` plus `128..=255` covers `u8`) |
-| `if let`, `while let` | ✅ | `let else` ⬜ |
+| `if let`, `while let`, `let else` | ✅ | |
 | Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
 | Tuple patterns in `match` | ✅ | |
-| Struct patterns, `..` rest patterns, `@` bindings | ⬜ | |
+| Struct patterns, `..` rest patterns | ✅ | `Point { x, y: 0, .. }`; struct-like enum variants and `@` bindings ⬜ |
 | String patterns | ⬜ | Compare with `==` for now |
 
 ## Ownership and references

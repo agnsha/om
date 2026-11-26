@@ -62,9 +62,12 @@ pub fn walk_block(v: &mut impl Visitor, b: &Block) {
 pub fn walk_stmt(v: &mut impl Visitor, s: &Stmt) {
     v.stmt(s);
     match s {
-        Stmt::Let { pat, value, .. } => {
+        Stmt::Let { pat, value, else_block, .. } => {
             walk_pattern(v, pat);
             walk_expr(v, value);
+            if let Some(b) = else_block {
+                walk_block(v, b);
+            }
         }
         Stmt::Assign { target, value, .. } => {
             walk_expr(v, target);
@@ -167,6 +170,11 @@ pub fn walk_pattern(v: &mut impl Visitor, p: &Pattern) {
     match &p.kind {
         PatKind::Tuple(subs) | PatKind::Variant(_, subs) | PatKind::Or(subs) => {
             for s in subs {
+                walk_pattern(v, s);
+            }
+        }
+        PatKind::Struct(_, fields, _) => {
+            for (_, s) in fields {
                 walk_pattern(v, s);
             }
         }

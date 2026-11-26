@@ -393,7 +393,12 @@ fn walk_block(b: &Block, f: &mut dyn FnMut(&Expr)) {
 
 fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match s {
-        Stmt::Let { value, .. } => walk_expr(value, f),
+        Stmt::Let { value, else_block, .. } => {
+            walk_expr(value, f);
+            if let Some(b) = else_block {
+                walk_block(b, f);
+            }
+        }
         Stmt::Assign { target, value, .. } => {
             walk_expr(target, f);
             walk_expr(value, f);
@@ -529,6 +534,7 @@ fn compile_inner(
     all.impls.extend(program.impls.iter().cloned());
     all.consts.extend(program.consts.iter().cloned());
     all.traits.extend(program.traits.iter().cloned());
+    all.type_aliases.extend(program.type_aliases.iter().cloned());
     let program = &all;
 
     // `OM_TARGET` (a target triple such as `x86_64-pc-windows-msvc`) cross-compiles
@@ -559,6 +565,7 @@ fn compile_inner(
         queue: Vec::new(),
         strings: HashMap::new(),
         structs: HashMap::new(),
+        type_aliases: HashMap::new(),
         struct_defaults: HashMap::new(),
         enums: HashMap::new(),
         consts: HashMap::new(),
@@ -712,6 +719,7 @@ struct Codegen {
     queue: Vec<(String, String, Subst)>,
     strings: HashMap<String, DataId>,
     structs: HashMap<String, StructShape>,
+    type_aliases: HashMap<String, TypeExpr>,
     /// Field defaults from struct declarations, in field order.
     struct_defaults: HashMap<String, Vec<Option<Expr>>>,
     enums: HashMap<String, EnumShape>,
@@ -920,6 +928,13 @@ impl Codegen {
                 _ => err("`Ptr` takes one type argument", t.span),
             };
         }
+        if let Some(target) = self.type_aliases.get(&t.name).cloned() {
+            if !t.args.is_empty() {
+                return err(format!("`{}` does not take type arguments", t.name), t.span);
+            }
+            // Aliases are not generic: the caller's type parameters must not leak into the target.
+            return self.resolve(&target, &Subst::new());
+        }
         let (generics, is_struct) = match (self.structs.get(&t.name), self.enums.get(&t.name)) {
             (Some((g, _)), _) => (g, true),
             (_, Some((g, _))) => (g, false),
@@ -1032,6 +1047,27 @@ impl Codegen {
             let vs = e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect();
             self.enums.insert(e.name.clone(), (e.generics.clone(), vs));
         }
+        // After structs and enums, so a clash is reported at the alias, not at the prelude.
+        for a in &p.type_aliases {
+            if self.type_aliases.contains_key(&a.name)
+                || self.structs.contains_key(&a.name)
+                || self.enums.contains_key(&a.name)
+                || builtin_ty(&a.name).is_some()
+                || a.name == "Ptr"
+            {
+                return err(format!("type `{}` is defined twice", a.name), a.span);
+            }
+            self.type_aliases.insert(a.name.clone(), a.ty.clone());
+        }
+        let mut checked = HashSet::new();
+        for a in &p.type_aliases {
+            if self.alias_cycle(&a.ty, &mut vec![a.name.clone()], &mut checked) {
+                return err(
+                    format!("type `{}` contains itself through type aliases; use a struct or enum", a.name),
+                    a.span,
+                );
+            }
+        }
         // Check every field type, with type parameters standing in as `i64`.
         for s in &p.structs {
             let sub: Subst = s.generics.iter().map(|g| (g.clone(), Ty::I64)).collect();
@@ -1064,7 +1100,34 @@ impl Codegen {
             let ty = Ty::Enum(e.name.clone(), vec![Ty::I64; e.generics.len()]);
             self.check_not_recursive(&ty, &mut vec![], e.span)?;
         }
+        // Check unused aliases too, so `type Bad = Missing` is an error.
+        for a in &p.type_aliases {
+            let ty = self.resolve(&a.ty, &Subst::new())?;
+            self.check_size(&ty, a.span)?;
+        }
         Ok(())
+    }
+
+    /// True if `t` reaches an alias already on `stack`, which would make `resolve` loop forever.
+    /// `checked` holds aliases already known to be cycle-free, so shared aliases are explored once.
+    fn alias_cycle(&self, t: &TypeExpr, stack: &mut Vec<String>, checked: &mut HashSet<String>) -> bool {
+        if t.args.iter().any(|a| self.alias_cycle(a, stack, checked)) {
+            return true;
+        }
+        let Some(target) = self.type_aliases.get(&t.name) else { return false };
+        if stack.contains(&t.name) {
+            return true;
+        }
+        if checked.contains(&t.name) {
+            return false;
+        }
+        stack.push(t.name.clone());
+        let found = self.alias_cycle(target, stack, checked);
+        stack.pop();
+        if !found {
+            checked.insert(t.name.clone());
+        }
+        found
     }
 
     /// Values are stored inline, so a type may not contain itself.
@@ -2341,7 +2404,7 @@ impl<'a> Lower<'a> {
 
     fn stmt(&mut self, s: &Stmt) -> CResult<()> {
         match s {
-            Stmt::Let { pat, ty, value, span } => {
+            Stmt::Let { pat, ty, value, else_block, span } => {
                 let hint = self.let_hint.take();
                 let want = match ty {
                     Some(t) => Some(self.resolve(t)?),
@@ -2374,8 +2437,35 @@ impl<'a> Lower<'a> {
                     return Ok(());
                 }
                 self.check_pattern(pat, &vty)?;
-                if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
-                    return err("this `let` pattern might not match; use `if let` or `match` instead", pat.span);
+                if let Some(els) = else_block {
+                    let was_dead = self.dead;
+                    let test = self.pat_test(pat, &vty, &vals)?;
+                    let bind_blk = self.b.create_block();
+                    let else_blk = self.b.create_block();
+                    self.b.ins().brif(test, bind_blk, &[], else_blk, &[]);
+                    self.b.switch_to_block(else_blk);
+                    self.b.seal_block(else_blk);
+                    self.dead = false;
+                    // Nothing was bound, so the value is ours to free before leaving.
+                    if own == Own::Owned {
+                        self.drop_value(&vals, &vty)?;
+                    }
+                    let before = self.moved.clone();
+                    self.block_expect(els, None)?;
+                    if !self.dead {
+                        return err("the `else` of a `let else` must not finish; end it with `return`, `break`, `continue` or `panic`", els.span);
+                    }
+                    self.moved = before;
+                    // The else path ends in unreachable code that may hold instructions; close it.
+                    self.b.ins().trap(TrapCode::unwrap_user(1));
+                    self.b.switch_to_block(bind_blk);
+                    self.b.seal_block(bind_blk);
+                    self.dead = was_dead;
+                } else if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
+                    return err(
+                        "this `let` pattern might not match; use `if let`, `match` or `let else` instead",
+                        pat.span,
+                    );
                 }
                 let _ = span;
                 self.pat_bind(pat, &vty, &vals, own)?;
@@ -3584,6 +3674,15 @@ impl<'a> Lower<'a> {
     /// Replace a leading `Self` or type parameter in a path with the concrete type's
     /// name: `T::default` becomes `i64::default`. Also returns that type.
     fn type_path(&self, name: &str) -> (String, Option<Ty>) {
+        // `P { .. }` and `P::new()` with `type P = Point` mean `Point`. Only plain names
+        // expand; `type V = Vec[i64]` cannot be spelled as a path.
+        let (head, rest) = name.split_once("::").map_or((name, None), |(h, r)| (h, Some(r)));
+        if let Some(target) = self.cg.type_aliases.get(head) {
+            if target.args.is_empty() && target.name != TypeExpr::TUPLE {
+                let full = rest.map_or(target.name.clone(), |r| format!("{}::{r}", target.name));
+                return self.type_path(&full);
+            }
+        }
         let (head, rest) = match name.split_once("::") {
             Some((h, r)) => (h, Some(r)),
             None if name == "Self" => (name, None),
@@ -4782,6 +4881,12 @@ impl<'a> Lower<'a> {
                 Ty::Tuple(ts) => subs.iter().zip(ts).any(|(s, t)| self.pat_owns(s, t)),
                 _ => false,
             },
+            PatKind::Struct(_, fields, _) => {
+                let members = self.cg.fields(ty);
+                fields.iter().any(|(fname, sub)| {
+                    members.iter().find(|(n, _)| n == fname).is_some_and(|(_, t)| self.pat_owns(sub, t))
+                })
+            }
             PatKind::Variant(path, subs) => match self.pattern_variant(path, ty, pat.span) {
                 Ok(idx) => {
                     let ftys = self.cg.variants(ty)[idx].1.clone();
@@ -4805,6 +4910,33 @@ impl<'a> Lower<'a> {
                     let w = self.cg.width(t);
                     self.drop_residual(s, t, &vals[off..off + w])?;
                     off += w;
+                }
+                Ok(())
+            }
+            PatKind::Struct(_, fields, _) => {
+                // A Drop type must be dropped whole, so its fields cannot be moved out.
+                if self.cg.implements(ty, "Drop") {
+                    if has_bindings(pat) {
+                        return err(format!("cannot move a field out of {ty}, which implements Drop"), pat.span);
+                    }
+                    return self.drop_value(vals, ty);
+                }
+                let members = self.cg.fields(ty);
+                for (fname, sub) in fields {
+                    if let Some((ft, off)) = self.cg.field(ty, fname) {
+                        let w = self.cg.width(&ft);
+                        self.drop_residual(sub, &ft, &vals[off..off + w])?;
+                    }
+                }
+                // Fields the pattern skips with `..` are not bound, so drop them here.
+                let bound: std::collections::HashSet<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                for (name, fty) in &members {
+                    if !bound.contains(name.as_str()) {
+                        if let Some((_, off)) = self.cg.field(ty, name) {
+                            let w = self.cg.width(fty);
+                            self.drop_value(&vals[off..off + w], fty)?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -4927,6 +5059,11 @@ impl<'a> Lower<'a> {
             },
             PatKind::Or(alts) => PatKind::Or(alts.iter().map(|a| self.const_pattern(a)).collect()),
             PatKind::Tuple(subs) => PatKind::Tuple(subs.iter().map(|a| self.const_pattern(a)).collect()),
+            PatKind::Struct(name, fields, rest) => PatKind::Struct(
+                name.clone(),
+                fields.iter().map(|(n, p)| (n.clone(), self.const_pattern(p))).collect(),
+                *rest,
+            ),
             k => k.clone(),
         };
         Pattern { kind, span: pat.span }
@@ -4964,6 +5101,29 @@ impl<'a> Lower<'a> {
                         return err("`|` patterns cannot bind names yet", a.span);
                     }
                     self.check_pattern(a, ty)?;
+                }
+                Ok(())
+            }
+            PatKind::Struct(name, fields, rest) => {
+                let name = &self.self_name(name);
+                if !matches!(ty, Ty::Struct(n, _) if n == name) {
+                    return mismatch(&format!("a struct `{name}`"));
+                }
+                self.check_private(ty, pat.span)?;
+                let members = self.cg.fields(ty);
+                for (i, (fname, sub)) in fields.iter().enumerate() {
+                    if fields[..i].iter().any(|(n, _)| n == fname) {
+                        return err(format!("field `{fname}` is bound more than once"), sub.span);
+                    }
+                    let Some((_, fty)) = members.iter().find(|(n, _)| n == fname) else {
+                        return err(format!("`{name}` has no field `{fname}`"), pat.span);
+                    };
+                    self.check_pattern(sub, fty)?;
+                }
+                if !rest {
+                    if let Some((mname, _)) = members.iter().find(|(m, _)| !fields.iter().any(|(n, _)| n == m)) {
+                        return err(format!("pattern does not mention field `{mname}`; use `..` to skip it"), pat.span);
+                    }
                 }
                 Ok(())
             }
@@ -5011,6 +5171,10 @@ impl<'a> Lower<'a> {
     /// Returns `None` if `rows` cover every value of `tys`, or one example of an
     /// uncovered value per column.
     fn missing(&self, rows: Vec<Vec<Pattern>>, tys: &[Ty]) -> Option<Vec<String>> {
+        // A row that cannot fail covers everything; without this, wide structs expand exponentially.
+        if rows.iter().any(|r| r.iter().all(irrefutable)) {
+            return None;
+        }
         let Some((ty, rest_tys)) = tys.split_first() else {
             return if rows.is_empty() { Some(vec![]) } else { None };
         };
@@ -5033,6 +5197,10 @@ impl<'a> Lower<'a> {
             Ty::Enum(..) => {
                 let base = ty.base().unwrap();
                 self.cg.variants(ty).into_iter().map(|(n, f)| (format!("{base}::{n}"), f)).collect()
+            }
+            Ty::Struct(..) => {
+                let members = self.cg.fields(ty);
+                vec![(ty.to_string(), members.into_iter().map(|(_, t)| t).collect())]
             }
             Ty::Tuple(ts) => vec![(String::new(), ts.clone())],
             Ty::Unit => vec![(String::new(), vec![])],
@@ -5094,6 +5262,22 @@ impl<'a> Lower<'a> {
                     PatKind::Wild | PatKind::Bind(..) => Some(vec![wild.clone(); ftys.len()]),
                     PatKind::Bool(b) => (b.to_string() == *label).then(Vec::new),
                     PatKind::Tuple(subs) => Some(subs.clone()),
+                    PatKind::Struct(_, fields, _) if matches!(ty, Ty::Struct(..)) => {
+                        // Reorder fields to match the struct definition order,
+                        // filling unmentioned fields with wildcards.
+                        let members = self.cg.fields(ty);
+                        let ordered: Vec<Pattern> = members
+                            .iter()
+                            .map(|(n, _)| {
+                                fields
+                                    .iter()
+                                    .find(|(fn_, _)| fn_ == n)
+                                    .map(|(_, p)| p.clone())
+                                    .unwrap_or_else(|| wild.clone())
+                            })
+                            .collect();
+                        Some(ordered)
+                    }
                     PatKind::Variant(path, subs) => {
                         let idx = self.pattern_variant(path, ty, row[0].span).ok()?;
                         let base = ty.base().unwrap();
@@ -5113,6 +5297,11 @@ impl<'a> Lower<'a> {
                     format!("({})", fields.join(", "))
                 } else if fields.is_empty() {
                     label.clone()
+                } else if matches!(ty, Ty::Struct(..)) {
+                    let members = self.cg.fields(ty);
+                    let pairs: Vec<String> =
+                        members.iter().zip(fields).map(|((n, _), p)| format!("{n}: {p}")).collect();
+                    format!("{label} {{ {} }}", pairs.join(", "))
                 } else {
                     format!("{label}({})", fields.join(", "))
                 };
@@ -5171,6 +5360,19 @@ impl<'a> Lower<'a> {
                 }
                 acc
             }
+            PatKind::Struct(_, fields, _) => {
+                let mut acc = self.b.ins().iconst(types::I8, 1);
+                for (fname, sub) in fields {
+                    if !irrefutable(sub) {
+                        if let Some((ft, off)) = self.cg.field(ty, fname) {
+                            let w = self.cg.width(&ft);
+                            let sub_test = self.pat_test(sub, &ft, &vals[off..off + w])?;
+                            acc = self.b.ins().band(acc, sub_test);
+                        }
+                    }
+                }
+                acc
+            }
             PatKind::Variant(path, subs) => {
                 let idx = self.pattern_variant(path, ty, pat.span)?;
                 let mut acc = self.b.ins().icmp_imm_s(IntCC::Equal, vals[0], idx as i64);
@@ -5201,6 +5403,15 @@ impl<'a> Lower<'a> {
                     let w = self.cg.width(t);
                     self.pat_bind(s, t, &vals[off..off + w], own)?;
                     off += w;
+                }
+                Ok(())
+            }
+            PatKind::Struct(_, fields, _) => {
+                for (fname, sub) in fields {
+                    if let Some((ft, off)) = self.cg.field(ty, fname) {
+                        let w = self.cg.width(&ft);
+                        self.pat_bind(sub, &ft, &vals[off..off + w], own)?;
+                    }
                 }
                 Ok(())
             }
@@ -5565,6 +5776,7 @@ fn irrefutable(p: &Pattern) -> bool {
     match &p.kind {
         PatKind::Wild | PatKind::Bind(..) => true,
         PatKind::Tuple(subs) => subs.iter().all(irrefutable),
+        PatKind::Struct(_, fields, _) => fields.iter().all(|(_, s)| irrefutable(s)),
         PatKind::Or(alts) => alts.iter().any(irrefutable),
         _ => false,
     }
@@ -5574,6 +5786,7 @@ fn has_bindings(p: &Pattern) -> bool {
     match &p.kind {
         PatKind::Bind(..) => true,
         PatKind::Variant(_, subs) | PatKind::Tuple(subs) | PatKind::Or(subs) => subs.iter().any(has_bindings),
+        PatKind::Struct(_, fields, _) => fields.iter().any(|(_, s)| has_bindings(s)),
         _ => false,
     }
 }
