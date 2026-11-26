@@ -1,0 +1,306 @@
+{
+  "haiku": {
+    "om": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "compile",
+        "detail": "error[E0310]: i64 does not implement `Clone`, which `Stack::new` requires of `T`\n   --> attempts/haiku/om/05_stack.om:16:32\n   |\n16 |     let mut nums: Stack[i64] = Stack::new()\n   |                                ^^^^^^^^^^^^"
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "compile",
+        "detail": "error[E0300]: mismatched types: usize - i64 (convert with `as`)\n  --> attempts/haiku/om/07_binary_search.om:5:24\n  |\n5 |         let mid = lo + (hi - lo) / 2\n  |                        ^^^^^^^^^\nhelp: convert with `as usize` (attempts/haiku/om/07_binary_search.om:5:30, maybe)"
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "compile",
+        "detail": "error[E0301]: argument `e` should be Expr, found Box[Expr]\n   --> attempts/haiku/om/11_expr_tree.om:11:27\n   |\n11 |         Add(l, r) => eval(l) + eval(r),\n   |                           ^"
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    },
+    "python": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    },
+    "rust": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    }
+  },
+  "sonnet": {
+    "om": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "compile",
+        "detail": "error[E0310]: i64 does not implement `Clone`, which `Stack::new` requires of `T`\n   --> attempts/sonnet/om/05_stack.om:21:29\n   |\n21 |     let mut s: Stack[i64] = Stack::new()\n   |                             ^^^^^^^^^^^^"
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "compile",
+        "detail": "error[E0105]: empty `{}` in string; write `{{}}` for literal braces\n   --> attempts/sonnet/om/09_brackets.om:24:22\n   |\n24 |     let cases = [\"([]{})\", \"([)]\", \"((\", \"{[()()]}\", \")(\"]\n   |                      ^^\nhelp: write `{{}}` for literal braces, or put an expression inside (attempts/sonnet/om/09_brackets.om:24:22, maybe)"
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    },
+    "python": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    },
+    "rust": {
+      "01_fizzbuzz": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "02_word_count": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "03_bank": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "04_shapes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "05_stack": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "06_parse_ages": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "07_binary_search": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "08_roman": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "09_brackets": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "10_primes": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "11_expr_tree": {
+        "outcome": "pass",
+        "detail": ""
+      },
+      "12_caesar": {
+        "outcome": "pass",
+        "detail": ""
+      }
+    }
+  }
+}

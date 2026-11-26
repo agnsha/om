@@ -1,0 +1,13 @@
+fn main() {
+    let a = args()
+    let n = a[1].parse_int().expect("usage: strings N")
+    let mut s = String::new()
+    for i in 0..n {
+        s.push_str("{i},")
+    }
+    let mut sevens = 0
+    for b in s.bytes() {
+        if b == 55 { sevens += 1 }
+    }
+    print("{s.len()} {sevens}")
+}

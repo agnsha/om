@@ -1,0 +1,26 @@
+fn rotate(c: char, base: char, k: i64) -> char {
+    let offset = (c as i64 - base as i64 + k) % 26
+    let wrapped = (offset + 26) % 26
+    (base as u8 + wrapped as u8) as char
+}
+
+fn shift(text: str, k: i64) -> String {
+    let mut out = String::new()
+    for c in text.chars() {
+        if c >= 'a' && c <= 'z' {
+            out.push(rotate(c, 'a', k))
+        } else if c >= 'A' && c <= 'Z' {
+            out.push(rotate(c, 'A', k))
+        } else {
+            out.push(c)
+        }
+    }
+    out
+}
+
+fn main() {
+    let once = shift("Hello, World!", 3)
+    print(once)
+    print(shift(&once, 23))
+    print(shift("xyz ABC", 4))
+}

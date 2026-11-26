@@ -1,0 +1,28 @@
+struct Account { owner: String, balance: i64 }
+
+impl Account {
+    fn new(owner: String, balance: i64) -> Self { Account { owner, balance } }
+    fn deposit(&mut self, amount: i64) { self.balance += amount }
+    fn withdraw(&mut self, amount: i64) -> Result[i64, str] {
+        if amount > self.balance { return Err("insufficient funds") }
+        self.balance -= amount
+        Ok(self.balance)
+    }
+}
+
+fn main() {
+    let mut acct = Account::new("ada".to_string(), 100)
+    acct.deposit(50)
+    print("ok {acct.balance}")
+    match acct.withdraw(30) {
+        Ok(b) => print("ok {b}"),
+        Err(e) => print("error: {e}"),
+    }
+    match acct.withdraw(500) {
+        Ok(b) => print("ok {b}"),
+        Err(e) => print("error: {e}"),
+    }
+    acct.deposit(5)
+    print("ok {acct.balance}")
+    print("ada has {acct.balance}")
+}

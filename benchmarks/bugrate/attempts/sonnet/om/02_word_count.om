@@ -1,0 +1,27 @@
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog the fox"
+    let words = text.split(" ")
+    let mut distinct: Vec[str] = Vec::new()
+    let mut counts: Vec[i64] = Vec::new()
+    for w in &words {
+        let mut found = false
+        let mut i = 0
+        while i < distinct.len() {
+            if distinct[i] == w {
+                counts[i] += 1
+                found = true
+                break
+            }
+            i += 1
+        }
+        if !found {
+            distinct.push(w)
+            counts.push(1)
+        }
+    }
+    let mut i = 0
+    while i < distinct.len() {
+        print("{distinct[i]}: {counts[i]}")
+        i += 1
+    }
+}

@@ -1,0 +1,42 @@
+enum Expr {
+    Num(i64),
+    Add(Box[Expr], Box[Expr]),
+    Sub(Box[Expr], Box[Expr]),
+    Mul(Box[Expr], Box[Expr]),
+}
+
+impl Expr {
+    fn eval(&self) -> i64 {
+        match self {
+            Num(n) => n,
+            Add(a, b) => a.eval() + b.eval(),
+            Sub(a, b) => a.eval() - b.eval(),
+            Mul(a, b) => a.eval() * b.eval(),
+        }
+    }
+
+    fn depth(&self) -> i64 {
+        match self {
+            Num(_) => 1,
+            Add(a, b) => 1 + a.depth().max(b.depth()),
+            Sub(a, b) => 1 + a.depth().max(b.depth()),
+            Mul(a, b) => 1 + a.depth().max(b.depth()),
+        }
+    }
+}
+
+fn num(n: i64) -> Box[Expr] { Box::new(Expr::Num(n)) }
+
+fn main() {
+    let first = Expr::Mul(
+        Box::new(Expr::Add(num(2), num(3))),
+        Box::new(Expr::Sub(num(7), num(4))),
+    )
+    let second = Expr::Sub(
+        num(10),
+        Box::new(Expr::Mul(num(2), num(3))),
+    )
+    print(first.eval())
+    print(second.eval())
+    print("depth {first.depth()}")
+}

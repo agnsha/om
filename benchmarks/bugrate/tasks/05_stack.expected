@@ -1,0 +1,7 @@
+len 3
+peek 3
+pop 3
+pop 2
+pop 1
+empty
+top b

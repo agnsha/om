@@ -7,7 +7,7 @@
 
 <p><b>A systems language aiming for Rust-level speed, faster builds, and no lifetime annotations.</b></p>
 
-[Getting started](docs/getting-started.md) | [Language reference](docs/language.md) | [Examples](examples) | [Design](docs/design.md) | [Roadmap](#roadmap) | [Contributing](CONTRIBUTING.md)
+[Website](https://om-lang.pages.dev) | [Getting started](docs/getting-started.md) | [Benchmarks](benchmarks/RESULTS.md) | [Language reference](docs/language.md) | [Examples](examples) | [Design](docs/design.md) | [Roadmap](#roadmap) | [Contributing](CONTRIBUTING.md)
 
 [![CI](https://github.com/agnsha/om/actions/workflows/ci.yml/badge.svg)](https://github.com/agnsha/om/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)](#license)
@@ -16,7 +16,8 @@
 </div>
 
 This is the main source code repository for Om. It contains the compiler, the
-`om` command line tool, examples, and documentation.
+`om` command line tool, examples, and documentation. Guides, the Om Book and
+examples live on the website, **[om-lang.pages.dev](https://om-lang.pages.dev)**.
 
 ## Why Om?
 
@@ -67,6 +68,27 @@ Hello, Om!
 > library are still ahead. See the [roadmap](#roadmap) and the
 > [Rust parity checklist](docs/rust-parity.md).
 
+## Benchmarks: Om vs Rust vs Python
+
+A reproducible benchmark of speed, LLM tokens and bug rate lives in
+[`benchmarks/`](benchmarks). Full tables and method:
+**[benchmarks/RESULTS.md](benchmarks/RESULTS.md)**, also on the
+[website](https://om-lang.pages.dev/benchmarks.html). The short version, as
+measured today:
+
+| | Om | Rust | Python |
+|---|---|---|---|
+| **Speed** (7 programs, geometric mean) | 3.5x slower than Rust | fastest | 16x slower than Om |
+| **Tokens**, programs written by an LLM (o200k tokenizer) | 1.06x Rust | 1.00x | 0.79x Rust |
+| **Bug rate**, 12 tasks one-shot, Claude Sonnet / Haiku | 10/12, 9/12 pass | 12/12, 12/12 | 12/12, 12/12 |
+
+Om is far faster than Python but not yet close to Rust: it only has the
+Cranelift backend, and the LLVM release backend is phase 5. Models write
+slightly longer code in Om than in Rust because Om has no iterators or
+closures yet, and Om needs its 2,345-token guide in context. Every Om failure
+was a compile error caused by a gap in Om (listed in the results), not a wrong
+answer. Those gaps are the next things to fix.
+
 ## Design goals
 
 Rust proved that a language can be fast and memory-safe without a garbage
@@ -84,8 +106,7 @@ collector. Om takes that foundation and makes different trade-offs:
 compute. In release mode both hand similar code to LLVM, so parity is the honest
 target. The one place Om aims to beat idiomatic Rust at runtime is
 allocation-heavy request handling, where regions are the default instead of an
-opt-in crate. All speed numbers are *targets* until the benchmark suite lands in
-phase 5, and the results will be published here, losses included.
+opt-in crate. Today's measured numbers are below, losses included.
 
 Read the full [design document](docs/design.md).
 
@@ -237,7 +258,7 @@ The compiler is written in Rust and split into small crates. See
 | 3 | Memory model: `Vec`, `String`, `Box`, moves, drop, clone, borrow freezing, `for` over lists | ✅ done |
 | 3.5 | Closures, iterators, `HashMap`, modules and `pub` | next |
 | 4 | Standard library (strings, `Vec`, `Map`, files), regions, C interop | planned |
-| 5 | LLVM release backend, benchmark suite vs Rust, C and Go | planned |
+| 5 | LLVM release backend, benchmark suite vs C and Go ([vs Rust and Python: started](benchmarks)) | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |
 
 ## Getting help

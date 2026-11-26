@@ -1,0 +1,24 @@
+fn is_balanced(s: str) -> bool {
+    let mut stack: Vec[char] = Vec::new()
+    for c in s.chars() {
+        if c == '(' || c == '[' || c == '{' {
+            stack.push(c)
+        } else if c == ')' || c == ']' || c == '}' {
+            let want = if c == ')' { '(' } else if c == ']' { '[' } else { '{' }
+            if stack.len() == 0 { return false }
+            let top = stack.pop().expect("stack is not empty")
+            if top != want { return false }
+        }
+    }
+    stack.len() == 0
+}
+
+fn main() {
+    for s in ["([]{{}})", "([)]", "((", "{{[()()]}}", ")("] {
+        if is_balanced(s) {
+            print("{s} valid")
+        } else {
+            print("{s} invalid")
+        }
+    }
+}

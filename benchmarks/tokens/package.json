@@ -1,0 +1,7 @@
+{
+  "name": "om-token-benchmark",
+  "private": true,
+  "type": "module",
+  "scripts": { "count": "node count.mjs" },
+  "dependencies": { "js-tiktoken": "1.0.15" }
+}
