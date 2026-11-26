@@ -446,10 +446,13 @@ fn calc(a: i64, b: i64) -> Result[i64, str] {
 let (lo, hi) = min_max(9, 2)
 if let Some(root) = find(49) { print(root) } else { print("none") }
 while let Some(n) = stack { ... }
+let Point { x, y } = p
+let Color { r, .. } = c
 ```
 
 A `let` pattern must always match; use `if let` or `match` for patterns that
-might fail.
+might fail. A struct pattern names every field, or ends with `..` to skip the
+rest; `x` is short for `x: x`.
 
 ## Ownership, Vec, String and Box
 

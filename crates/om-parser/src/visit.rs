@@ -170,6 +170,11 @@ pub fn walk_pattern(v: &mut impl Visitor, p: &Pattern) {
                 walk_pattern(v, s);
             }
         }
+        PatKind::Struct(_, fields, _) => {
+            for (_, s) in fields {
+                walk_pattern(v, s);
+            }
+        }
         PatKind::Wild
         | PatKind::Bind(..)
         | PatKind::Int(_)

@@ -1347,6 +1347,31 @@ impl Parser {
                     }
                     self.expect(T::RParen)?;
                     PatKind::Variant(path, subs)
+                } else if self.at(&T::LBrace) && (path.contains("::") || is_upper(&path)) {
+                    // Struct pattern: `Point { x, y: pat, .. }`
+                    self.bump(); // eat `{`
+                    let mut fields = Vec::new();
+                    let mut rest = false;
+                    while !self.at(&T::RBrace) {
+                        if self.eat(&T::DotDot) {
+                            rest = true;
+                            self.eat(&T::Comma);
+                            break;
+                        }
+                        let (fname, _) = self.ident()?;
+                        let pat = if self.eat(&T::Colon) {
+                            self.pattern()?
+                        } else {
+                            // Shorthand: `x` means `x: x`
+                            Pattern { kind: PatKind::Bind(fname.clone(), false), span: self.prev_span() }
+                        };
+                        fields.push((fname, pat));
+                        if !self.eat(&T::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(T::RBrace)?;
+                    PatKind::Struct(path, fields, rest)
                 } else if path.contains("::") || is_upper(&path) {
                     PatKind::Variant(path, vec![])
                 } else {
