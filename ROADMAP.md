@@ -39,7 +39,7 @@ cost, and each is cheap compared with what it buys.
 |---|---|---|---|---|
 | 0.1 | Built-in scalars (`i64`, `f64`, `bool`, `char`, ...) implement `Clone`, `Copy`, `Eq`, `Ord`, `Default` as traits, not just methods | Both models failed `05_stack` on `impl[T: Clone]` rejecting `Stack[i64]` | S | P0 |
 | 0.2 | Plain string literals do not interpolate; interpolation needs a marker (`f"..."`, `$"..."`) or only triggers on `{ident...}` | `"([]{})"` is a compile error today, a trap no mainstream language has (`09_brackets`) | S | P0 |
-| 0.3 | Integer literal inference from later use (`let mut lo = 0` becomes `usize` when compared with `len()`) | Caused `07_binary_search`; also hit both games (signed coordinates vs `usize` indexes) | M | P0 |
+| 0.3 | Integer literal inference from later use, including arithmetic: in `let mut lo = 0; let mut hi = v.len()`, `lo` should become `usize` so `hi - lo` type-checks | Caused `07_binary_search` (it fails at `hi - lo`; comparisons between integer types already work). Emberdeep hit a related case: a literal takes the other side's type in `-1 < v.len()` | M | P0 |
 | 0.4 | Auto-deref `Box[T]` to `&T` at call sites (deref coercion), and `&Vec[T]` to `&[T]` once slices exist | Caused `11_expr_tree`; Rust users and models expect it | S | P0 |
 | 0.5 | Closures (`\|x\| x + 1`) with capture by reference and by move | Prerequisite for iterators, `sort_by_key`, `retain`; named in both game notes | L | P0 |
 | 0.6 | Iterators and adapters: `iter`, `map`, `filter`, `enumerate`, `zip`, `sum`, `collect`, `any`, `all`, `fold` | The main reason model-written Om is longer than Rust | L | P0 |
@@ -48,7 +48,7 @@ cost, and each is cheap compared with what it buys.
 | 0.9 | Re-run the bug-rate benchmark *with* compiler feedback (one or two repair rounds) as a second column | Real agents compile and retry; this measures what `--json` errors and `om fix` are worth | S | P0 |
 | 0.10 | Grow the bug-rate suite from 12 to 50+ tasks, with more models, and publish pass@1 with confidence intervals | 12 tasks means one failure moves the score 8 points; the current gap might be noise or might be larger | M | P0 |
 | 0.11 | Gate CI on the benchmarks: token budget already gated; add bug-rate (cached responses) and speed regression checks | Stops later work from silently undoing these wins | S | P1 |
-| 0.12 | Fix the remaining game-note pain points: `for` over `&self.list` borrowing all of `self`, fixed-size arrays `[T; N]`, `write!`-style formatting into an existing `String`, `print` without a newline, `eprint`/`dbg`, `const` in patterns, tuples implementing `Ord` | Each cost a workaround in a 2,000-line real program; models will hit the same walls | M | P0 |
+| 0.12 | Fix the game-note pain points that are still open: `for` over `&self.list` borrowing all of `self`, fixed-size arrays `[T; N]`, formatting a number into an existing `String`, `dbg`, tuples implementing `Ord` | Each cost a workaround in a 2,000-line real program; models will hit the same walls. (`eprint`, `print(x, end:)` and constants in patterns were already fixed before Emberdeep) | M | P0 |
 
 ## 1. AI usage: models write correct Om on the first try
 
