@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Om website and guides
+    url: https://om-lang.pages.dev
+    about: Install guide, the Om Book, Om by Example and exercises.
+  - name: Report a security problem
+    url: https://github.com/agnsha/om/blob/main/SECURITY.md
+    about: Please report vulnerabilities privately as described here, not in a public issue.

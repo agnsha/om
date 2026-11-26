@@ -10,7 +10,9 @@
 [Website](https://om-lang.pages.dev) | [Getting started](docs/getting-started.md) | [Benchmarks](benchmarks/RESULTS.md) | [Language reference](docs/language.md) | [Examples](examples) | [Design](docs/design.md) | [Roadmap](#roadmap) | [Contributing](CONTRIBUTING.md)
 
 [![CI](https://github.com/agnsha/om/actions/workflows/ci.yml/badge.svg)](https://github.com/agnsha/om/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-om--lang.pages.dev-f97316)](https://om-lang.pages.dev)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)](#license)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 ![Status](https://img.shields.io/badge/status-phase%203%20(early)-orange)
 
 </div>
@@ -118,12 +120,8 @@ Studio Build Tools on Windows (x86-64). **On Windows, follow the
 [Windows guide](docs/windows.md)**: it works straight from PowerShell, no WSL
 needed, and covers a prebuilt `om.exe`.
 
-```sh
-git clone https://github.com/agnsha/om
-cd om
-cargo install --path crates/omc   # installs the `om` command
-om run examples/hello.om
-```
+Then run the commands from [Quick start](#quick-start). CI builds and tests
+every change on Linux, macOS and Windows.
 
 ## Usage
 
@@ -164,6 +162,18 @@ error: cannot assign twice to `x`; declare it with `let mut x`
 3 |     x = 2
   |     ^^^^^
 ```
+
+## Learn Om
+
+| Where | What you get |
+|---|---|
+| [om-lang.pages.dev](https://om-lang.pages.dev) | The website: install guide, the Om Book, Om by Example and exercises |
+| [Getting started](docs/getting-started.md) | Install, first program, and the everyday commands |
+| [Language reference](docs/language.md) | Every feature that works today, with examples |
+| [`examples/`](examples) | Small programs, each checked by the test suite |
+| `om guide` | The whole language on one page, for you or an AI agent |
+| [Om for AI agents](docs/guide.md) | The same guide as a file |
+| [Rust parity checklist](docs/rust-parity.md) | What Om has from Rust, and what is still missing |
 
 ## Features Rust doesn't have
 
@@ -264,13 +274,15 @@ The compiler is written in Rust and split into small crates. See
 ## Getting help
 
 Om is young, so the issue tracker is the place for questions as well as bugs.
-Open an [issue](https://github.com/agnsha/om/issues/new/choose) using the bug
-report or language proposal template.
+Open an [issue](https://github.com/agnsha/om/issues/new/choose) and pick the
+bug report, question or language proposal template. Security problems go
+through the private process in [SECURITY.md](SECURITY.md) instead.
 
 ## Contributing
 
 Om is a learning-friendly project and contributions are welcome. Start with
 [CONTRIBUTING.md](CONTRIBUTING.md) and issues labelled `good first issue`.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

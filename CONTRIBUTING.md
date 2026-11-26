@@ -22,7 +22,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all
 ```
 
-CI runs the same checks on Linux and macOS.
+CI runs the same checks on Linux, macOS and Windows. The pull request
+template has a short checklist; fill it in so reviewers know how you tested.
 
 ## Automated review
 
@@ -32,6 +33,8 @@ suggestions: reply to them in the PR (mention `@coderabbitai`) if you disagree
 or want it to look again. A maintainer still approves and merges.
 
 ## Where to start
+
+- The [website](https://om-lang.pages.dev) and `om guide` to learn the language first
 
 - Issues labelled **good first issue**
 - [docs/architecture.md](docs/architecture.md) has a step-by-step guide for adding a language feature
