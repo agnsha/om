@@ -1,0 +1,19 @@
+fn main() {
+    let a = args()
+    let n = a[1].parse_int().expect("usage: collatz N")
+    let mut best = 0
+    let mut best_len = 0
+    for start in 1..n {
+        let mut x = start
+        let mut len = 1
+        while x != 1 {
+            x = if x % 2 == 0 { x / 2 } else { 3 * x + 1 }
+            len += 1
+        }
+        if len > best_len {
+            best_len = len
+            best = start
+        }
+    }
+    print("{best} {best_len}")
+}

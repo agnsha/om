@@ -1,0 +1,22 @@
+fn to_roman(n: i64) -> String {
+    let vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    let syms = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    let mut rest = n
+    let mut out = String::new()
+    let mut i = 0
+    while i < vals.len() {
+        while rest >= vals[i] {
+            out.push_str(syms[i])
+            rest -= vals[i]
+        }
+        i += 1
+    }
+    out
+}
+
+fn main() {
+    let nums = [1994, 2024, 4, 9, 3999, 58]
+    for n in &nums {
+        print("{n} = {to_roman(n)}")
+    }
+}

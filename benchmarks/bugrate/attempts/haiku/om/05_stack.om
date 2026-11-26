@@ -1,0 +1,37 @@
+struct Stack[T] { items: Vec[T] }
+
+impl[T: Clone] Stack[T] {
+    fn new() -> Self { Stack { items: Vec::new() } }
+    fn push(&mut self, value: T) { self.items.push(value) }
+    fn pop(&mut self) -> Option[T] { self.items.pop() }
+    fn peek(&self) -> Option[T] {
+        let n = self.items.len()
+        if n == 0 { return None }
+        Some(self.items[n - 1].clone())
+    }
+    fn len(&self) -> usize { self.items.len() }
+}
+
+fn main() {
+    let mut nums: Stack[i64] = Stack::new()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    print("len {nums.len()}")
+    match nums.peek() {
+        Some(v) => print("peek {v}"),
+        None => print("empty"),
+    }
+    while let Some(v) = nums.pop() {
+        print("pop {v}")
+    }
+    print("empty")
+
+    let mut words: Stack[String] = Stack::new()
+    words.push("a".to_string())
+    words.push("b".to_string())
+    match words.peek() {
+        Some(top) => print("top {top}"),
+        None => print("empty"),
+    }
+}

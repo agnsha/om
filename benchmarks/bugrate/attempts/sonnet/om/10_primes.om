@@ -1,0 +1,38 @@
+fn is_prime(n: i64) -> bool {
+    if n < 2 {
+        return false
+    }
+    let mut d = 2
+    while d * d <= n {
+        if n % d == 0 {
+            return false
+        }
+        d += 1
+    }
+    true
+}
+
+fn main() {
+    let mut line = String::new()
+    let mut found = 0
+    let mut n = 2
+    while found < 10 {
+        if is_prime(n) {
+            if found > 0 {
+                line.push_str(" ")
+            }
+            line.push_str("{n}")
+            found += 1
+        }
+        n += 1
+    }
+    print(line)
+
+    let mut count = 0
+    for k in 2..10000 {
+        if is_prime(k) {
+            count += 1
+        }
+    }
+    print("count {count}")
+}

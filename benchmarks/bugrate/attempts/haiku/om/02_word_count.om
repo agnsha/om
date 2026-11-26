@@ -1,0 +1,20 @@
+fn main() {
+    let words = ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog", "the", "fox"]
+    let mut seen: Vec[str] = Vec::new()
+    let mut counts: Vec[i64] = Vec::new()
+    for w in &words {
+        let mut idx = seen.len()
+        for i in 0..seen.len() {
+            if seen[i] == w { idx = i }
+        }
+        if idx == seen.len() {
+            seen.push(w)
+            counts.push(1)
+        } else {
+            counts[idx] += 1
+        }
+    }
+    for i in 0..seen.len() {
+        print("{seen[i]}: {counts[i]}")
+    }
+}

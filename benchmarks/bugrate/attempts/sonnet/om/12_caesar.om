@@ -1,0 +1,23 @@
+fn shift(text: str, k: i64) -> String {
+    let mut out = String::new()
+    for c in text.chars() {
+        let code = c as u8 as i64
+        if code >= 97 && code <= 122 {
+            let r = (code - 97 + k) % 26
+            out.push((97 + r) as u8 as char)
+        } else if code >= 65 && code <= 90 {
+            let r = (code - 65 + k) % 26
+            out.push((65 + r) as u8 as char)
+        } else {
+            out.push(c)
+        }
+    }
+    out
+}
+
+fn main() {
+    let a = shift("Hello, World!", 3)
+    print(a)
+    print(shift(&a, 23))
+    print(shift("xyz ABC", 4))
+}

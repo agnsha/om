@@ -1,0 +1,19 @@
+fn main() {
+    let a = args()
+    let n = a[1].parse_int().expect("usage: sieve N") as usize
+    let mut composite = [false; n + 1]
+    let mut count = 0
+    let mut i: usize = 2
+    while i <= n {
+        if !composite[i] {
+            count += 1
+            let mut j = i * i
+            while j <= n {
+                composite[j] = true
+                j += i
+            }
+        }
+        i += 1
+    }
+    print(count)
+}

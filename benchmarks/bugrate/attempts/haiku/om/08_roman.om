@@ -1,0 +1,19 @@
+fn roman(n: i64) -> String {
+    let symbols = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    let values = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    let mut rest = n
+    let mut out = String::new()
+    for i in 0..values.len() {
+        while rest >= values[i] {
+            out.push_str(symbols[i])
+            rest -= values[i]
+        }
+    }
+    out
+}
+
+fn main() {
+    for n in [1994, 2024, 4, 9, 3999, 58] {
+        print("{n} = {roman(n)}")
+    }
+}

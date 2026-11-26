@@ -1,0 +1,32 @@
+fn is_valid(s: str) -> bool {
+    let mut stack: Vec[char] = Vec::new()
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => stack.push(c),
+            ')' | ']' | '}' => {
+                let want = if c == ')' { '(' } else if c == ']' { '[' } else { '{' }
+                match stack.pop() {
+                    Some(top) => {
+                        if top != want {
+                            return false
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            _ => {}
+        }
+    }
+    stack.len() == 0
+}
+
+fn main() {
+    let cases = ["([]{})", "([)]", "((", "{[()()]}", ")("]
+    for s in &cases {
+        if is_valid(s) {
+            print("{s} valid")
+        } else {
+            print("{s} invalid")
+        }
+    }
+}

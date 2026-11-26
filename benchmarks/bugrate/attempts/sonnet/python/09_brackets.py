@@ -1,0 +1,16 @@
+PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def is_balanced(text: str) -> bool:
+    stack = []
+    for ch in text:
+        if ch in "([{":
+            stack.append(ch)
+        elif ch in PAIRS:
+            if not stack or stack.pop() != PAIRS[ch]:
+                return False
+    return not stack
+
+
+for s in ["([]{})", "([)]", "((", "{[()()]}", ")("]:
+    print(f"{s} {'valid' if is_balanced(s) else 'invalid'}")

@@ -1,0 +1,24 @@
+fn main() {
+    let lines = ["alice,30", "bob,x", "carol,25", "dave", "erin,-4"]
+    let mut sum = 0
+    for line in &lines {
+        let parts = line.split(",")
+        if parts.len() != 2 {
+            print("bad line: {line}")
+            continue
+        }
+        let name = parts[0]
+        match parts[1].trim().parse_int() {
+            Ok(age) => {
+                if age < 0 {
+                    print("negative age for {name}")
+                } else {
+                    print("{name} is {age}")
+                    sum += age
+                }
+            }
+            Err(_) => print("bad age for {name}"),
+        }
+    }
+    print("sum {sum}")
+}
