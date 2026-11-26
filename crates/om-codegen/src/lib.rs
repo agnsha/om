@@ -2450,6 +2450,12 @@ impl<'a> Lower<'a> {
                     if own == Own::Owned {
                         self.drop_value(&vals, &vty)?;
                     }
+                    // The else block leaves the statement, so its temporaries must go now too. They stay
+                    // registered: the binding path still drops them at the end of the statement.
+                    let temps = self.temps[temps_mark..].to_vec();
+                    for (v, t) in temps.iter().rev() {
+                        self.drop_value(v, t)?;
+                    }
                     let before = self.moved.clone();
                     self.block_expect(els, None)?;
                     if !self.dead {
@@ -5191,6 +5197,14 @@ impl<'a> Lower<'a> {
                 _ => expanded.push(row),
             }
         }
+        // No row tests this column, so it cannot decide anything: skip it rather than try every constructor.
+        if expanded.iter().all(|r| matches!(r[0].kind, PatKind::Wild | PatKind::Bind(..))) {
+            let rows = expanded.into_iter().map(|r| r[1..].to_vec()).collect();
+            return self.missing(rows, rest_tys).map(|mut w| {
+                w.insert(0, "_".into());
+                w
+            });
+        }
         let wild = Pattern { kind: PatKind::Wild, span: Span::default() };
         let ctors: Vec<(String, Vec<Ty>)> = match ty {
             Ty::Bool => vec![("true".into(), vec![]), ("false".into(), vec![])],
@@ -5299,8 +5313,15 @@ impl<'a> Lower<'a> {
                     label.clone()
                 } else if matches!(ty, Ty::Struct(..)) {
                     let members = self.cg.fields(ty);
-                    let pairs: Vec<String> =
-                        members.iter().zip(fields).map(|((n, _), p)| format!("{n}: {p}")).collect();
+                    let mut pairs: Vec<String> = members
+                        .iter()
+                        .zip(fields)
+                        .filter(|(_, p)| p.as_str() != "_")
+                        .map(|((n, _), p)| format!("{n}: {p}"))
+                        .collect();
+                    if pairs.len() < members.len() {
+                        pairs.push("..".into());
+                    }
                     format!("{label} {{ {} }}", pairs.join(", "))
                 } else {
                     format!("{label}({})", fields.join(", "))
