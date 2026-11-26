@@ -271,6 +271,8 @@ The compiler is written in Rust and split into small crates. See
 | 5 | LLVM release backend, benchmark suite vs C and Go ([vs Rust and Python: started](benchmarks)) | planned |
 | 6 | HTTP server library with per-request regions, structured concurrency | planned |
 
+For a longer, prioritized list of what Om needs to be viable (AI use, tokens, safety, speed), see [ROADMAP.md](ROADMAP.md).
+
 ## Getting help
 
 Om is young, so the issue tracker is the place for questions as well as bugs.
