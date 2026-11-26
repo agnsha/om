@@ -407,6 +407,7 @@ fn rejects_bad_generic_programs() {
             "cannot convert the error type str into bool",
         ),
         ("fn main() { let Some(x) = Some(1) }", "might not match"),
+        ("fn main() { let Some(x) = Some(1) else { print(\"no\") } }", "must not finish"),
         ("fn main() { let x = None }", "cannot infer type `T`"),
         ("fn main() { let (a, b) = (1, 2, 3) }", "tuple of 2"),
         ("fn id[T](x: T) -> T { x } fn main() { let a: bool = id(1) }", "i64"),

@@ -2341,7 +2341,7 @@ impl<'a> Lower<'a> {
 
     fn stmt(&mut self, s: &Stmt) -> CResult<()> {
         match s {
-            Stmt::Let { pat, ty, value, span } => {
+            Stmt::Let { pat, ty, value, else_block, span } => {
                 let hint = self.let_hint.take();
                 let want = match ty {
                     Some(t) => Some(self.resolve(t)?),
@@ -2374,8 +2374,27 @@ impl<'a> Lower<'a> {
                     return Ok(());
                 }
                 self.check_pattern(pat, &vty)?;
-                if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
-                    return err("this `let` pattern might not match; use `if let` or `match` instead", pat.span);
+                if let Some(els) = else_block {
+                    let test = self.pat_test(pat, &vty, &vals)?;
+                    let bind_blk = self.b.create_block();
+                    let else_blk = self.b.create_block();
+                    self.b.ins().brif(test, bind_blk, &[], else_blk, &[]);
+                    self.b.switch_to_block(else_blk);
+                    self.b.seal_block(else_blk);
+                    let before = self.moved.clone();
+                    self.block_expect(els, None)?;
+                    if !self.dead {
+                        return err("the `else` of a `let else` must not finish; end it with `return`, `break`, `continue` or `panic`", els.span);
+                    }
+                    self.moved = before;
+                    self.b.switch_to_block(bind_blk);
+                    self.b.seal_block(bind_blk);
+                    self.dead = false;
+                } else if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
+                    return err(
+                        "this `let` pattern might not match; use `if let`, `match` or `let else` instead",
+                        pat.span,
+                    );
                 }
                 let _ = span;
                 self.pat_bind(pat, &vty, &vals, own)?;

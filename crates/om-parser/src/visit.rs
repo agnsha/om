@@ -62,9 +62,12 @@ pub fn walk_block(v: &mut impl Visitor, b: &Block) {
 pub fn walk_stmt(v: &mut impl Visitor, s: &Stmt) {
     v.stmt(s);
     match s {
-        Stmt::Let { pat, value, .. } => {
+        Stmt::Let { pat, value, else_block, .. } => {
             walk_pattern(v, pat);
             walk_expr(v, value);
+            if let Some(b) = else_block {
+                walk_block(v, b);
+            }
         }
         Stmt::Assign { target, value, .. } => {
             walk_expr(v, target);
