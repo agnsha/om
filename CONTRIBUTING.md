@@ -24,6 +24,13 @@ cargo test --all
 
 CI runs the same checks on Linux and macOS.
 
+## Automated review
+
+Pull requests are reviewed automatically by [CodeRabbit](https://coderabbit.ai),
+configured in [.coderabbit.yaml](.coderabbit.yaml). Its comments are
+suggestions: reply to them in the PR (mention `@coderabbitai`) if you disagree
+or want it to look again. A maintainer still approves and merges.
+
 ## Where to start
 
 - Issues labelled **good first issue**

@@ -1,0 +1,84 @@
+# CodeRabbit AI review config: https://docs.coderabbit.ai/reference/configuration
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+
+reviews:
+  profile: chill            # concise: fewer nitpicks, focus on real issues
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  # Skip build output, lockfiles, binaries and generated site bundles.
+  path_filters:
+    - "!target/**"
+    - "!**/target/**"
+    - "!Cargo.lock"
+    - "!**/*.o"
+    - "!**/*.zip"
+    - "!**/*.tar.gz"
+    - "!**/*.bundle"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.svg"
+    - "!**/dist/**"
+    - "!site/**/*.min.*"
+    - "!**/*.expected"
+
+  path_instructions:
+    - path: "crates/om-lexer/**/*.rs"
+      instructions: >-
+        Lexer for the Om language. Check token spans and positions stay correct,
+        no panics on malformed or non-UTF-8 input, and no needless allocation in
+        the hot loop.
+    - path: "crates/om-parser/**/*.rs"
+      instructions: >-
+        Parser and AST. Check error recovery and that diagnostics point at the
+        right span with a clear message. Flag grammar changes that are not
+        reflected in docs/language.md.
+    - path: "crates/om-codegen/**/*.rs"
+      instructions: >-
+        Code generator emitting C. Correctness and speed matter most: watch for
+        undefined behaviour in emitted C, integer overflow, missing escaping of
+        string literals and paths, and ownership/drop order mistakes.
+    - path: "crates/omc/**/*.rs"
+      instructions: >-
+        The `om` CLI driver. Check error handling and exit codes, path handling
+        that works on Windows, Linux and macOS, and safe invocation of the C
+        compiler (no shell injection).
+    - path: "**/*.rs"
+      instructions: >-
+        Code must pass `cargo fmt`, `cargo clippy -D warnings` and `cargo test`.
+        Prefer no `unwrap()` on user input; avoid new dependencies unless needed.
+    - path: "**/*.om"
+      instructions: >-
+        Om source. Om aims to be token-efficient and AI-friendly: prefer the
+        shortest idiomatic form. Programs in examples/ need a matching
+        `.expected` file with their output.
+    - path: "docs/**/*.md"
+      instructions: >-
+        Check that code samples match current Om syntax and that claims about
+        performance are backed by the benchmarks.
+
+  tools:
+    clippy:
+      enabled: true
+    markdownlint:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true
