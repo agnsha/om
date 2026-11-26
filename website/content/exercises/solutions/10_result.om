@@ -1,0 +1,11 @@
+fn add_strings(a: str, b: str) -> Result[i64, str] {
+    let x = a.parse_int()?
+    let y = b.parse_int()?
+    Ok(x + y)
+}
+
+fn main() {
+    assert(add_strings("2", "40").unwrap() == 42)
+    assert(add_strings("2", "forty").is_err())
+    print("ok")
+}

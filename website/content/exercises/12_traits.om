@@ -1,0 +1,20 @@
+// Exercise 12: traits and generics
+// Implement `Area` for `Square` and `Circle`, then write `total_area`,
+// a generic function that adds up the areas of two shapes of the same type.
+
+trait Area {
+    fn area(&self) -> f64
+}
+
+struct Square { side: f64 }
+struct Circle { r: f64 }
+
+fn main() {
+    let a = Square { side: 2.0 }
+    let b = Square { side: 3.0 }
+    assert(total_area(a, b) == 13.0)
+    let c = Circle { r: 1.0 }
+    let d = Circle { r: 2.0 }
+    assert(total_area(c, d) > 15.7)
+    print("ok")
+}

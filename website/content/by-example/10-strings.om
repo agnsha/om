@@ -1,0 +1,31 @@
+// String owns text; str is a view of text (like Rust's &str).
+fn shout(s: str) -> String {
+    let mut out = s.to_uppercase()
+    out.push('!')
+    out
+}
+
+fn main() {
+    let mut s = String::from("hello")
+    s.push_str(", world")
+    s += "."
+    print(s)
+    print(s.len())
+    print(s.contains("world"))
+    print(s.replace("world", "Om"))
+    print(shout(&s))
+
+    let line = "  name = Om  "
+    if let Some((k, v)) = line.trim().split_once(" = ") {
+        print("key {k}, value {v}")
+    }
+
+    for word in "one two three".split_whitespace() {
+        print(word)
+    }
+
+    let n = 7
+    let msg = "n squared is {n * n}"
+    print(msg)
+    print(n.to_string() + " items")
+}

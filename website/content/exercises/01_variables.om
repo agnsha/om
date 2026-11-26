@@ -1,0 +1,9 @@
+// Exercise 1: variables
+// Make this compile. Don't change the `print` line.
+
+fn main() {
+    let count = 0
+    count += 1
+    assert(count == 1)
+    print("ok")
+}

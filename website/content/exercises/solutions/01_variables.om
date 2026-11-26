@@ -1,0 +1,6 @@
+fn main() {
+    let mut count = 0
+    count += 1
+    assert(count == 1)
+    print("ok")
+}

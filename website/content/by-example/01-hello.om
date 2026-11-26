@@ -1,0 +1,7 @@
+// Every program starts at `fn main`. `print` writes any value and a newline.
+fn main() {
+    print("Hello, Om!")
+    print(42)
+    print(true)
+    print((1, "two", 3.5))
+}

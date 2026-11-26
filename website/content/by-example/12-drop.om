@@ -1,0 +1,21 @@
+// Implement Drop to run cleanup when a value goes away. No garbage collector.
+struct Guard {
+    name: String,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        print("release {self.name}")
+    }
+}
+
+fn main() {
+    let _a = Guard { name: String::from("a") }
+    {
+        let _b = Guard { name: String::from("b") }
+        print("inner scope ends")
+    }
+    let _c = Guard { name: String::from("c") }
+    print("main ends")
+    // drops run in reverse order of declaration: c, then a
+}

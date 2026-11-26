@@ -1,0 +1,13 @@
+// `defer` runs code when the block exits, newest first, even on early return (Om extra).
+fn process(n: i64) -> i64 {
+    print("open {n}")
+    defer print("close {n}")
+    if n < 0 { return 0 }
+    defer print("done with {n}")
+    n * 10
+}
+
+fn main() {
+    print(process(4))
+    print(process(-1))
+}

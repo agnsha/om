@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="Om">
+<title>Om</title>
+<defs><linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#f4f6f8"/><stop offset=".45" stop-color="#9aa4ae"/><stop offset=".55" stop-color="#6b7580"/><stop offset="1" stop-color="#d9dee3"/></linearGradient>
+<linearGradient id="steel2" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#aab3bc"/><stop offset="1" stop-color="#5a646e"/></linearGradient>
+<radialGradient id="pit" cx=".5" cy=".4" r=".6"><stop offset="0" stop-color="#2b323b"/><stop offset="1" stop-color="#0d1015"/></radialGradient>
+<linearGradient id="hot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#ff5e1a"/></linearGradient></defs>
+<g>
+<path d="M220.28 107.82 L234.27 113.36 L234.27 138.64 L220.28 144.18 L216.60 157.90 L225.95 169.69 L213.31 191.58 L198.43 189.38 L188.38 199.43 L190.58 214.31 L168.69 226.95 L156.90 217.60 L143.18 221.28 L137.64 235.27 L112.36 235.27 L106.82 221.28 L93.10 217.60 L81.31 226.95 L59.42 214.31 L61.62 199.43 L51.57 189.38 L36.69 191.58 L24.05 169.69 L33.40 157.90 L29.72 144.18 L15.73 138.64 L15.73 113.36 L29.72 107.82 L33.40 94.10 L24.05 82.31 L36.69 60.42 L51.57 62.62 L61.62 52.57 L59.42 37.69 L81.31 25.05 L93.10 34.40 L106.82 30.72 L112.36 16.73 L137.64 16.73 L143.18 30.72 L156.90 34.40 L168.69 25.05 L190.58 37.69 L188.38 52.57 L198.43 62.62 L213.31 60.42 L225.95 82.31 L216.60 94.10Z" fill="#161b22" opacity=".35"/>
+<path d="M215.28 101.82 L229.27 107.36 L229.27 132.64 L215.28 138.18 L211.60 151.90 L220.95 163.69 L208.31 185.58 L193.43 183.38 L183.38 193.43 L185.58 208.31 L163.69 220.95 L151.90 211.60 L138.18 215.28 L132.64 229.27 L107.36 229.27 L101.82 215.28 L88.10 211.60 L76.31 220.95 L54.42 208.31 L56.62 193.43 L46.57 183.38 L31.69 185.58 L19.05 163.69 L28.40 151.90 L24.72 138.18 L10.73 132.64 L10.73 107.36 L24.72 101.82 L28.40 88.10 L19.05 76.31 L31.69 54.42 L46.57 56.62 L56.62 46.57 L54.42 31.69 L76.31 19.05 L88.10 28.40 L101.82 24.72 L107.36 10.73 L132.64 10.73 L138.18 24.72 L151.90 28.40 L163.69 19.05 L185.58 31.69 L183.38 46.57 L193.43 56.62 L208.31 54.42 L220.95 76.31 L211.60 88.10Z" fill="url(#steel)" stroke="#161b22" stroke-width="5" stroke-linejoin="round"/>
+<circle cx="120" cy="120" r="78" fill="none" stroke="#ffffff" stroke-opacity=".55" stroke-width="2"/>
+<circle cx="120" cy="120" r="72" fill="url(#pit)" stroke="#161b22" stroke-width="5"/>
+<clipPath id="in"><circle cx="120" cy="120" r="70"/></clipPath>
+<g clip-path="url(#in)">
+<path d="M82 187.15553940568262V54.84446059431738L120 136L158 54.84446059431738V187.15553940568262" transform="translate(3 4)" fill="none" stroke="#000" stroke-opacity=".5" stroke-width="22" stroke-linejoin="miter"/>
+<path d="M82 187.15553940568262V54.84446059431738L120 136L158 54.84446059431738V187.15553940568262" fill="none" stroke="#161b22" stroke-width="27" stroke-linejoin="miter" stroke-miterlimit="10"/>
+<path d="M82 187.15553940568262V54.84446059431738L120 136L158 54.84446059431738V187.15553940568262" fill="none" stroke="url(#hot)" stroke-width="19" stroke-linejoin="miter" stroke-miterlimit="10"/>
+</g>
+<circle cx="180.10" cy="180.10" r="6.5" fill="url(#steel2)" stroke="#161b22" stroke-width="2.5"/><path d="M176.60 183.60L183.60 176.60" stroke="#161b22" stroke-width="2" stroke-linecap="round"/><circle cx="59.90" cy="180.10" r="6.5" fill="url(#steel2)" stroke="#161b22" stroke-width="2.5"/><path d="M56.40 183.60L63.40 176.60" stroke="#161b22" stroke-width="2" stroke-linecap="round"/><circle cx="59.90" cy="59.90" r="6.5" fill="url(#steel2)" stroke="#161b22" stroke-width="2.5"/><path d="M56.40 63.40L63.40 56.40" stroke="#161b22" stroke-width="2" stroke-linecap="round"/><circle cx="180.10" cy="59.90" r="6.5" fill="url(#steel2)" stroke="#161b22" stroke-width="2.5"/><path d="M176.60 63.40L183.60 56.40" stroke="#161b22" stroke-width="2" stroke-linecap="round"/>
+<circle cx="120" cy="136" r="4.5" fill="url(#steel2)" stroke="#161b22" stroke-width="2"/>
+</g>
+</svg>

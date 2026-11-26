@@ -1,0 +1,51 @@
+# Ownership and borrowing
+
+Moves, `.clone()`, `&` and `&mut` parameters. Types that own nothing are copied.
+
+```om
+// Each heap value has one owner. Assigning moves it; .clone() copies it.
+fn total(list: &Vec[i64]) -> i64 {
+    let mut t = 0
+    for x in list { t += x }
+    t
+}
+
+fn add_one(list: &mut Vec[i64]) {
+    list.push(1)
+}
+
+fn consume(list: Vec[i64]) -> i64 {
+    list.len() as i64
+}
+
+fn main() {
+    let a = [1, 2, 3]
+    let b = a.clone()          // deep copy; `a` is still usable
+    print(total(&a))           // borrow: `a` is not moved
+
+    let mut c = b              // `b` moves into `c`; using `b` now is an error
+    add_one(&mut c)
+    print(c)
+
+    print(consume(c))          // `c` moves into the function
+
+    // Plain data (numbers, bool, char, structs of those) copies instead of moving.
+    let p = (1, 2)
+    let q = p
+    print(p)
+    print(q)
+}
+```
+
+Run it:
+
+```console
+$ om run 11-ownership.om
+6
+[1, 2, 3, 1]
+4
+(1, 2)
+(1, 2)
+```
+
+The source is in [`11-ownership.om`](11-ownership.om). Back to [Om by Example](README.md).
