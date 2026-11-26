@@ -424,6 +424,16 @@ fn rejects_bad_generic_programs() {
 }
 
 #[test]
+fn wide_struct_patterns_check_quickly() {
+    // Without skipping untested columns this is 2^31 steps.
+    let fields: String = (0..32).map(|i| format!("f{i}: bool, ")).collect();
+    let src = format!(
+        "struct W {{ {fields} }} fn h(w: W) -> i64 {{ match w {{ W {{ f31: true, .. }} => 1 }} }} fn main() {{}}"
+    );
+    assert!(compile_error(&src).contains("missing: W { f31: false, .. }"));
+}
+
+#[test]
 fn traits_bounds_and_operators() {
     let src = r#"
         trait Speak {
