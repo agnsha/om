@@ -295,7 +295,8 @@ impl Parser {
             self.bump();
         }
         while !self.at(&T::Eof) {
-            let item = matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait);
+            let item =
+                matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait | T::Type);
             if item && self.col0.get(self.pos).copied().unwrap_or(false) {
                 return;
             }

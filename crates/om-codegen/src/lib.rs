@@ -927,7 +927,8 @@ impl Codegen {
             if !t.args.is_empty() {
                 return err(format!("`{}` does not take type arguments", t.name), t.span);
             }
-            return self.resolve(&target, subst);
+            // Aliases are not generic: the caller's type parameters must not leak into the target.
+            return self.resolve(&target, &Subst::new());
         }
         let (generics, is_struct) = match (self.structs.get(&t.name), self.enums.get(&t.name)) {
             (Some((g, _)), _) => (g, true),
@@ -1024,29 +1025,9 @@ impl Codegen {
     }
 
     fn declare_types(&mut self, p: &Program) -> CResult<()> {
-        for a in &p.type_aliases {
-            if self.type_aliases.contains_key(&a.name)
-                || self.structs.contains_key(&a.name)
-                || self.enums.contains_key(&a.name)
-            {
-                return err(format!("type `{}` is defined twice", a.name), a.span);
-            }
-            self.type_aliases.insert(a.name.clone(), a.ty.clone());
-        }
-        for a in &p.type_aliases {
-            if self.alias_cycle(&a.ty, &mut vec![a.name.clone()]) {
-                return err(
-                    format!("type `{}` contains itself through type aliases; use a struct or enum", a.name),
-                    a.span,
-                );
-            }
-        }
         // Register names first so types can refer to each other in any order.
         for s in &p.structs {
-            if self.structs.contains_key(&s.name)
-                || self.enums.contains_key(&s.name)
-                || self.type_aliases.contains_key(&s.name)
-            {
+            if self.structs.contains_key(&s.name) || self.enums.contains_key(&s.name) {
                 return err(format!("type `{}` is defined twice", s.name), s.span);
             }
             self.structs.insert(s.name.clone(), (s.generics.clone(), s.fields.clone()));
@@ -1055,14 +1036,32 @@ impl Codegen {
             }
         }
         for e in &p.enums {
-            if self.structs.contains_key(&e.name)
-                || self.enums.contains_key(&e.name)
-                || self.type_aliases.contains_key(&e.name)
-            {
+            if self.structs.contains_key(&e.name) || self.enums.contains_key(&e.name) {
                 return err(format!("type `{}` is defined twice", e.name), e.span);
             }
             let vs = e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect();
             self.enums.insert(e.name.clone(), (e.generics.clone(), vs));
+        }
+        // After structs and enums, so a clash is reported at the alias, not at the prelude.
+        for a in &p.type_aliases {
+            if self.type_aliases.contains_key(&a.name)
+                || self.structs.contains_key(&a.name)
+                || self.enums.contains_key(&a.name)
+                || builtin_ty(&a.name).is_some()
+                || a.name == "Ptr"
+            {
+                return err(format!("type `{}` is defined twice", a.name), a.span);
+            }
+            self.type_aliases.insert(a.name.clone(), a.ty.clone());
+        }
+        let mut checked = HashSet::new();
+        for a in &p.type_aliases {
+            if self.alias_cycle(&a.ty, &mut vec![a.name.clone()], &mut checked) {
+                return err(
+                    format!("type `{}` contains itself through type aliases; use a struct or enum", a.name),
+                    a.span,
+                );
+            }
         }
         // Check every field type, with type parameters standing in as `i64`.
         for s in &p.structs {
@@ -1096,21 +1095,33 @@ impl Codegen {
             let ty = Ty::Enum(e.name.clone(), vec![Ty::I64; e.generics.len()]);
             self.check_not_recursive(&ty, &mut vec![], e.span)?;
         }
+        // Check unused aliases too, so `type Bad = Missing` is an error.
+        for a in &p.type_aliases {
+            let ty = self.resolve(&a.ty, &Subst::new())?;
+            self.check_size(&ty, a.span)?;
+        }
         Ok(())
     }
 
     /// True if `t` reaches an alias already on `stack`, which would make `resolve` loop forever.
-    fn alias_cycle(&self, t: &TypeExpr, stack: &mut Vec<String>) -> bool {
-        if t.args.iter().any(|a| self.alias_cycle(a, stack)) {
+    /// `checked` holds aliases already known to be cycle-free, so shared aliases are explored once.
+    fn alias_cycle(&self, t: &TypeExpr, stack: &mut Vec<String>, checked: &mut HashSet<String>) -> bool {
+        if t.args.iter().any(|a| self.alias_cycle(a, stack, checked)) {
             return true;
         }
         let Some(target) = self.type_aliases.get(&t.name) else { return false };
         if stack.contains(&t.name) {
             return true;
         }
+        if checked.contains(&t.name) {
+            return false;
+        }
         stack.push(t.name.clone());
-        let found = self.alias_cycle(target, stack);
+        let found = self.alias_cycle(target, stack, checked);
         stack.pop();
+        if !found {
+            checked.insert(t.name.clone());
+        }
         found
     }
 
@@ -3631,6 +3642,15 @@ impl<'a> Lower<'a> {
     /// Replace a leading `Self` or type parameter in a path with the concrete type's
     /// name: `T::default` becomes `i64::default`. Also returns that type.
     fn type_path(&self, name: &str) -> (String, Option<Ty>) {
+        // `P { .. }` and `P::new()` with `type P = Point` mean `Point`. Only plain names
+        // expand; `type V = Vec[i64]` cannot be spelled as a path.
+        let (head, rest) = name.split_once("::").map_or((name, None), |(h, r)| (h, Some(r)));
+        if let Some(target) = self.cg.type_aliases.get(head) {
+            if target.args.is_empty() && target.name != TypeExpr::TUPLE {
+                let full = rest.map_or(target.name.clone(), |r| format!("{}::{r}", target.name));
+                return self.type_path(&full);
+            }
+        }
         let (head, rest) = match name.split_once("::") {
             Some((h, r)) => (h, Some(r)),
             None if name == "Self" => (name, None),
