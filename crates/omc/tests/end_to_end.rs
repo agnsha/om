@@ -410,6 +410,8 @@ fn rejects_bad_generic_programs() {
         ("struct P { x: i64 } struct Q { x: i64 } fn main() { let P { x } = Q { x: 1 } }", "a struct `P`"),
         ("struct P { x: i64, y: i64 } fn main() { let P { x, .. } = P { x: 1, y: 2 }; let P { x: a, x: b, y } = P { x: 1, y: 2 } }", "bound more than once"),
         ("struct P { x: i64, y: i64 } fn main() { let P { x } = P { x: 1, y: 2 } }", "does not mention field `y`"),
+        ("struct N { x: i64 } impl Drop for N { fn drop(&mut self) {} } fn main() { let N { x } = N { x: 1 } }", "which implements Drop"),
+        ("fn main() { let String { .. } = String::new() }", "are private"),
         ("fn main() { let x = None }", "cannot infer type `T`"),
         ("fn main() { let (a, b) = (1, 2, 3) }", "tuple of 2"),
         ("fn id[T](x: T) -> T { x } fn main() { let a: bool = id(1) }", "i64"),

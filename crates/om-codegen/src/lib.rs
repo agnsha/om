@@ -4815,6 +4815,13 @@ impl<'a> Lower<'a> {
                 Ok(())
             }
             PatKind::Struct(_, fields, _) => {
+                // A Drop type must be dropped whole, so its fields cannot be moved out.
+                if self.cg.implements(ty, "Drop") {
+                    if has_bindings(pat) {
+                        return err(format!("cannot move a field out of {ty}, which implements Drop"), pat.span);
+                    }
+                    return self.drop_value(vals, ty);
+                }
                 let members = self.cg.fields(ty);
                 for (fname, sub) in fields {
                     if let Some((ft, off)) = self.cg.field(ty, fname) {
@@ -4999,9 +5006,11 @@ impl<'a> Lower<'a> {
                 Ok(())
             }
             PatKind::Struct(name, fields, rest) => {
+                let name = &self.self_name(name);
                 if !matches!(ty, Ty::Struct(n, _) if n == name) {
                     return mismatch(&format!("a struct `{name}`"));
                 }
+                self.check_private(ty, pat.span)?;
                 let members = self.cg.fields(ty);
                 for (i, (fname, sub)) in fields.iter().enumerate() {
                     if fields[..i].iter().any(|(n, _)| n == fname) {
@@ -5063,6 +5072,10 @@ impl<'a> Lower<'a> {
     /// Returns `None` if `rows` cover every value of `tys`, or one example of an
     /// uncovered value per column.
     fn missing(&self, rows: Vec<Vec<Pattern>>, tys: &[Ty]) -> Option<Vec<String>> {
+        // A row that cannot fail covers everything; without this, wide structs expand exponentially.
+        if rows.iter().any(|r| r.iter().all(irrefutable)) {
+            return None;
+        }
         let Some((ty, rest_tys)) = tys.split_first() else {
             return if rows.is_empty() { Some(vec![]) } else { None };
         };

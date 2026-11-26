@@ -11,6 +11,13 @@ struct Color {
     b: u8,
 }
 
+impl Point {
+    fn sum(self) -> i64 {
+        let Self { x, y } = self
+        x + y
+    }
+}
+
 fn classify(p: Point) -> str {
     match p {
         Point { x: 0, y: 0 } => "origin",
@@ -24,6 +31,7 @@ fn main() {
     let p = Point { x: 3, y: 4 }
     let Point { x, y } = p
     print("x = {x}, y = {y}")
+    print(Point { x: 1, y: 2 }.sum())
 
     print(classify(Point { x: 0, y: 0 }))
     print(classify(Point { x: 5, y: 0 }))
