@@ -10,6 +10,14 @@ pub struct Program {
     pub impls: Vec<ImplBlock>,
     pub consts: Vec<ConstDef>,
     pub traits: Vec<TraitDef>,
+    pub type_aliases: Vec<TypeAlias>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAlias {
+    pub name: String,
+    pub ty: TypeExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

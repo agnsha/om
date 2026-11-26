@@ -529,6 +529,7 @@ fn compile_inner(
     all.impls.extend(program.impls.iter().cloned());
     all.consts.extend(program.consts.iter().cloned());
     all.traits.extend(program.traits.iter().cloned());
+    all.type_aliases.extend(program.type_aliases.iter().cloned());
     let program = &all;
 
     // `OM_TARGET` (a target triple such as `x86_64-pc-windows-msvc`) cross-compiles
@@ -559,6 +560,7 @@ fn compile_inner(
         queue: Vec::new(),
         strings: HashMap::new(),
         structs: HashMap::new(),
+        type_aliases: HashMap::new(),
         struct_defaults: HashMap::new(),
         enums: HashMap::new(),
         consts: HashMap::new(),
@@ -712,6 +714,7 @@ struct Codegen {
     queue: Vec<(String, String, Subst)>,
     strings: HashMap<String, DataId>,
     structs: HashMap<String, StructShape>,
+    type_aliases: HashMap<String, TypeExpr>,
     /// Field defaults from struct declarations, in field order.
     struct_defaults: HashMap<String, Vec<Option<Expr>>>,
     enums: HashMap<String, EnumShape>,
@@ -920,6 +923,12 @@ impl Codegen {
                 _ => err("`Ptr` takes one type argument", t.span),
             };
         }
+        if let Some(target) = self.type_aliases.get(&t.name).cloned() {
+            if !t.args.is_empty() {
+                return err(format!("`{}` does not take type arguments", t.name), t.span);
+            }
+            return self.resolve(&target, subst);
+        }
         let (generics, is_struct) = match (self.structs.get(&t.name), self.enums.get(&t.name)) {
             (Some((g, _)), _) => (g, true),
             (_, Some((g, _))) => (g, false),
@@ -1015,9 +1024,29 @@ impl Codegen {
     }
 
     fn declare_types(&mut self, p: &Program) -> CResult<()> {
+        for a in &p.type_aliases {
+            if self.type_aliases.contains_key(&a.name)
+                || self.structs.contains_key(&a.name)
+                || self.enums.contains_key(&a.name)
+            {
+                return err(format!("type `{}` is defined twice", a.name), a.span);
+            }
+            self.type_aliases.insert(a.name.clone(), a.ty.clone());
+        }
+        for a in &p.type_aliases {
+            if self.alias_cycle(&a.ty, &mut vec![a.name.clone()]) {
+                return err(
+                    format!("type `{}` contains itself through type aliases; use a struct or enum", a.name),
+                    a.span,
+                );
+            }
+        }
         // Register names first so types can refer to each other in any order.
         for s in &p.structs {
-            if self.structs.contains_key(&s.name) || self.enums.contains_key(&s.name) {
+            if self.structs.contains_key(&s.name)
+                || self.enums.contains_key(&s.name)
+                || self.type_aliases.contains_key(&s.name)
+            {
                 return err(format!("type `{}` is defined twice", s.name), s.span);
             }
             self.structs.insert(s.name.clone(), (s.generics.clone(), s.fields.clone()));
@@ -1026,7 +1055,10 @@ impl Codegen {
             }
         }
         for e in &p.enums {
-            if self.structs.contains_key(&e.name) || self.enums.contains_key(&e.name) {
+            if self.structs.contains_key(&e.name)
+                || self.enums.contains_key(&e.name)
+                || self.type_aliases.contains_key(&e.name)
+            {
                 return err(format!("type `{}` is defined twice", e.name), e.span);
             }
             let vs = e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect();
@@ -1065,6 +1097,21 @@ impl Codegen {
             self.check_not_recursive(&ty, &mut vec![], e.span)?;
         }
         Ok(())
+    }
+
+    /// True if `t` reaches an alias already on `stack`, which would make `resolve` loop forever.
+    fn alias_cycle(&self, t: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        if t.args.iter().any(|a| self.alias_cycle(a, stack)) {
+            return true;
+        }
+        let Some(target) = self.type_aliases.get(&t.name) else { return false };
+        if stack.contains(&t.name) {
+            return true;
+        }
+        stack.push(t.name.clone());
+        let found = self.alias_cycle(target, stack);
+        stack.pop();
+        found
     }
 
     /// Values are stored inline, so a type may not contain itself.

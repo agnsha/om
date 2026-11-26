@@ -212,6 +212,15 @@ const LIMIT: i64 = 100
 const PI: f64 = 3.14159
 ```
 
+## Type aliases
+
+```om
+type Score = i64
+type Grid = Vec[Vec[char]]
+```
+
+An alias is another name for the same type, not a new type.
+
 ## Control flow
 
 `if` is an expression. Both branches must have the same type, unless one of
