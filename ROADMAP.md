@@ -93,7 +93,7 @@ including the guide's fixed cost.
 | 2.5 | `OM_AGENT=1` as the default when stdout is not a TTY, with errors trimmed to code + location + fix | Agents should not pay for ASCII-art source snippets they cannot see | S | P1 |
 | 2.6 | `om test` and `om build` print nothing on success (or one line) | Success output is pure token cost in an agent loop | S | P1 |
 | 2.7 | Tokenizer-aware keyword and stdlib names: prefer names that are one token in common tokenizers (`len`, `push`, `map`) and avoid ones that split | Small per-use saving that compounds; check with `om tokens` before adding names | S | P2 |
-| 2.8 | Shorthands with measured savings: `let else`, struct update `..base`, tuple structs, `type` aliases, implicit `Ok(())` at the end of `-> Result[(), E]` functions | Each removes a common boilerplate line Rust also has | M | P1 |
+| 2.8 | Shorthands with measured savings: `let else` (open in #13), `type` aliases (open in #14), struct update `..base`, tuple structs, implicit `Ok(())` at the end of `-> Result[(), E]` functions | Each removes a common boilerplate line Rust also has | M | P1 |
 | 2.9 | Derive-free traits: let `==`, `<`, `hash`, `clone` work structurally on plain data without `impl` blocks, as printing already does | Removes `#[derive(...)]`-equivalent lines models would otherwise write | M | P1 |
 | 2.10 | *(speculative)* Indentation-optional syntax or dropping braces | Python's lead is partly indentation, but braces help models keep structure in long files and make constrained decoding easier. Measure before deciding; the default should be "no" | M | P2 |
 | 2.11 | Error conversion through `From` in `?` | Removes `.map_err(...)` noise on every fallible call | M | P1 |
