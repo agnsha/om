@@ -46,7 +46,7 @@ works, ⬜ planned.
 | `Box[T]` | ✅ | `*b` reads, writes and moves out, field access and methods auto-deref |
 | `HashMap<K, V>`, `HashSet`, `VecDeque`, `BTreeMap` | ⬜ | Next batch, with iterators |
 | Recursive types | ✅ | Through `Box` or `Vec` (`enum List { Cons(i64, Box[List]), Nil }`) |
-| Type aliases `type X = Y` | ⬜ | |
+| Type aliases `type X = Y` | ✅ | Generic aliases `type Pair[T] = (T, T)` ⬜ |
 
 ## Pattern matching
 

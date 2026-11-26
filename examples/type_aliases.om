@@ -1,0 +1,31 @@
+// `type` gives an existing type a second name; both names mean the same type.
+
+type Score = i64
+type Grid = Vec[Vec[char]]
+
+struct Point { x: i64, y: i64 }
+impl Point {
+    fn origin() -> Point { Point { x: 0, y: 0 } }
+}
+type Pos = Point
+
+// A type parameter with the same name as an alias's target does not change the alias.
+fn best[Score](_tag: Score) -> Pos { Pos { x: 1, y: 2 } }
+
+fn total(scores: &Vec[Score]) -> Score {
+    let mut sum: Score = 0
+    for s in scores {
+        sum += *s
+    }
+    sum
+}
+
+fn main() {
+    let plain: i64 = 4
+    let scores: Vec[Score] = [3, plain]
+    print(total(&scores))
+    let grid: Grid = [['#', '.'], ['.', '#']]
+    print(grid.len())
+    let p = best("any")
+    print(p.x + p.y + Pos::origin().x)
+}

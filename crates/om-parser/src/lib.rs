@@ -104,7 +104,8 @@ pub fn parse_all(src: &str) -> (Program, Vec<ParseError>) {
             T::Impl => p.impl_block().map(|i| prog.impls.push(i)),
             T::Const => p.const_def().map(|c| prog.consts.push(c)),
             T::Trait => p.trait_def().map(|t| prog.traits.push(t)),
-            _ => p.error("`fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
+            T::Type => p.type_alias().map(|a| prog.type_aliases.push(a)),
+            _ => p.error("`fn`, `struct`, `enum`, `trait`, `impl`, `const` or `type`"),
         };
         if let Err(e) = item {
             p.errors.push(e);
@@ -306,7 +307,8 @@ impl Parser {
             self.bump();
         }
         while !self.at(&T::Eof) {
-            let item = matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait);
+            let item =
+                matches!(self.peek().kind, T::Fn | T::Struct | T::Enum | T::Impl | T::Const | T::Trait | T::Type);
             if item && self.col0.get(self.pos).copied().unwrap_or(false) {
                 return;
             }
@@ -660,6 +662,15 @@ impl Parser {
         let value = self.expr()?;
         self.eat(&T::Semi);
         Ok(ConstDef { name, ty, span: start.to(value.span), value })
+    }
+
+    fn type_alias(&mut self) -> PResult<TypeAlias> {
+        let start = self.expect(T::Type)?;
+        let (name, _) = self.ident()?;
+        self.expect(T::Eq)?;
+        let ty = self.ty()?;
+        self.eat(&T::Semi);
+        Ok(TypeAlias { name, ty: ty.clone(), span: start.to(ty.span) })
     }
 
     // ---------- statements ----------

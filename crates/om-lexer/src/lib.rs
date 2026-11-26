@@ -60,6 +60,7 @@ pub enum TokenKind {
     Const,
     Trait,
     Where,
+    Type,
     True,
     False,
     // Punctuation
@@ -151,6 +152,7 @@ impl fmt::Display for TokenKind {
             Const => "`const`",
             Trait => "`trait`",
             Where => "`where`",
+            Type => "`type`",
             True => "`true`",
             False => "`false`",
             LParen => "`(`",
@@ -683,6 +685,7 @@ impl<'a> Lexer<'a> {
             "const" => TokenKind::Const,
             "trait" => TokenKind::Trait,
             "where" => TokenKind::Where,
+            "type" => TokenKind::Type,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             name => TokenKind::Ident(name.to_string()),
