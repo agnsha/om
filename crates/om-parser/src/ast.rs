@@ -150,6 +150,8 @@ pub enum Stmt {
         pat: Pattern,
         ty: Option<TypeExpr>,
         value: Expr,
+        /// `else { return }` block; must diverge (return, break, continue or panic).
+        else_block: Option<Block>,
         span: Span,
     },
     /// `target = value`, or `target += value` when `op` is set.

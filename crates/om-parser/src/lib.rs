@@ -188,14 +188,26 @@ pub fn desugar_for_each(pat: Pattern, iter: Expr, body: Block, label: Option<Str
         ExprKind::Ref(false, list) => {
             let usize_ty = TypeExpr { name: "usize".into(), args: vec![], span };
             let setup = vec![
-                Stmt::Let { pat: bind(&c, false), ty: None, value: e(ExprKind::Ref(false, list)), span },
-                Stmt::Let { pat: bind(&i, true), ty: Some(usize_ty), value: e(ExprKind::Int(0)), span },
+                Stmt::Let {
+                    pat: bind(&c, false),
+                    ty: None,
+                    value: e(ExprKind::Ref(false, list)),
+                    else_block: None,
+                    span,
+                },
+                Stmt::Let {
+                    pat: bind(&i, true),
+                    ty: Some(usize_ty),
+                    value: e(ExprKind::Int(0)),
+                    else_block: None,
+                    span,
+                },
             ];
             let done = e(ExprKind::Binary(BinOp::Ge, Box::new(var(&i)), Box::new(call(var(&c), "len"))));
             let elem = e(ExprKind::Index(Box::new(var(&c)), Box::new(var(&i))));
             let mut stmts = vec![
                 Stmt::Expr(e(ExprKind::If(Box::new(done), brk(), None))),
-                Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), span },
+                Stmt::Let { pat, ty: None, value: e(ExprKind::Ref(false, Box::new(elem))), else_block: None, span },
                 Stmt::Assign { target: var(&i), op: Some(BinOp::Add), value: e(ExprKind::Int(1)), span },
             ];
             stmts.push(Stmt::Expr(e(ExprKind::Block(body))));
@@ -203,7 +215,7 @@ pub fn desugar_for_each(pat: Pattern, iter: Expr, body: Block, label: Option<Str
         }
         _ => {
             let setup = vec![
-                Stmt::Let { pat: bind(&c, true), ty: None, value: iter, span },
+                Stmt::Let { pat: bind(&c, true), ty: None, value: iter, else_block: None, span },
                 Stmt::Expr(call(var(&c), "reverse")),
             ];
             let arms = vec![
@@ -703,7 +715,9 @@ impl Parser {
                 let ty = if self.eat(&T::Colon) { Some(self.ty()?) } else { None };
                 self.expect(T::Eq)?;
                 let value = self.expr()?;
-                Ok(Stmt::Let { pat, ty, span: start.to(value.span), value })
+                let else_block = if self.eat(&T::Else) { Some(self.block()?) } else { None };
+                let end = else_block.as_ref().map_or(value.span, |b| b.span);
+                Ok(Stmt::Let { pat, ty, span: start.to(end), value, else_block })
             }
             T::While if self.peek_at(1) == &T::Let => {
                 // `while let P = e { body }` is `loop { match e { P => body, _ => break } }`.

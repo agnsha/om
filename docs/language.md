@@ -448,11 +448,13 @@ if let Some(root) = find(49) { print(root) } else { print("none") }
 while let Some(n) = stack { ... }
 let Point { x, y } = p
 let Color { r, .. } = c
+let Some(c) = s.chars().first() else { return None }
 ```
 
-A `let` pattern must always match; use `if let` or `match` for patterns that
-might fail. A struct pattern names every field, or ends with `..` to skip the
-rest; `x` is short for `x: x`.
+A `let` pattern must always match; use `if let`, `match`, or `let else` for
+patterns that might fail. The `else` of a `let else` must leave with `return`,
+`break`, `continue` or `panic`. A struct pattern names every field, or ends
+with `..` to skip the rest; `x` is short for `x: x`.
 
 ## Ownership, Vec, String and Box
 

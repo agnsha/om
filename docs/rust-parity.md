@@ -58,7 +58,7 @@ works, ⬜ planned.
 | Or-patterns `A \| B` | 🟡 | Without bindings |
 | Match guards `if cond` | ✅ | |
 | Exhaustiveness checking with a missing-case example | ✅ | Same matrix algorithm family as rustc, including integer and char ranges (`0..=127` plus `128..=255` covers `u8`) |
-| `if let`, `while let` | ✅ | `let else` ⬜ |
+| `if let`, `while let`, `let else` | ✅ | |
 | Destructuring in `let` (tuples, nested, `mut` bindings) | ✅ | Refutable `let` patterns are rejected, as in Rust |
 | Tuple patterns in `match` | ✅ | |
 | Struct patterns, `..` rest patterns | ✅ | `Point { x, y: 0, .. }`; struct-like enum variants and `@` bindings ⬜ |

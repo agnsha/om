@@ -14,4 +14,19 @@ fn main() {
     let t = String::from("hi")
     print(t == "hi")
     print("hi" != t)
+    for i in 0..4 {
+        let Ok(n) = pick(i) else { continue }
+        print("got {n.id}")
+    }
+    print(after_return(None))
+}
+struct Tracked { id: i64 }
+impl Drop for Tracked { fn drop(&mut self) { print("drop {self.id}") } }
+fn pick(i: i64) -> Result[Tracked, Tracked] { if i % 2 == 0 { Ok(Tracked { id: i }) } else { Err(Tracked { id: i }) } }
+fn after_return(o: Option[i64]) -> i64 {
+    let Some(a) = o else {
+        return 0
+        let Some(b) = o else { return 1 }
+    }
+    a
 }

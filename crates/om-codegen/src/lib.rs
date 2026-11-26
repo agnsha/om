@@ -393,7 +393,12 @@ fn walk_block(b: &Block, f: &mut dyn FnMut(&Expr)) {
 
 fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match s {
-        Stmt::Let { value, .. } => walk_expr(value, f),
+        Stmt::Let { value, else_block, .. } => {
+            walk_expr(value, f);
+            if let Some(b) = else_block {
+                walk_block(b, f);
+            }
+        }
         Stmt::Assign { target, value, .. } => {
             walk_expr(target, f);
             walk_expr(value, f);
@@ -2341,7 +2346,7 @@ impl<'a> Lower<'a> {
 
     fn stmt(&mut self, s: &Stmt) -> CResult<()> {
         match s {
-            Stmt::Let { pat, ty, value, span } => {
+            Stmt::Let { pat, ty, value, else_block, span } => {
                 let hint = self.let_hint.take();
                 let want = match ty {
                     Some(t) => Some(self.resolve(t)?),
@@ -2374,8 +2379,35 @@ impl<'a> Lower<'a> {
                     return Ok(());
                 }
                 self.check_pattern(pat, &vty)?;
-                if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
-                    return err("this `let` pattern might not match; use `if let` or `match` instead", pat.span);
+                if let Some(els) = else_block {
+                    let was_dead = self.dead;
+                    let test = self.pat_test(pat, &vty, &vals)?;
+                    let bind_blk = self.b.create_block();
+                    let else_blk = self.b.create_block();
+                    self.b.ins().brif(test, bind_blk, &[], else_blk, &[]);
+                    self.b.switch_to_block(else_blk);
+                    self.b.seal_block(else_blk);
+                    self.dead = false;
+                    // Nothing was bound, so the value is ours to free before leaving.
+                    if own == Own::Owned {
+                        self.drop_value(&vals, &vty)?;
+                    }
+                    let before = self.moved.clone();
+                    self.block_expect(els, None)?;
+                    if !self.dead {
+                        return err("the `else` of a `let else` must not finish; end it with `return`, `break`, `continue` or `panic`", els.span);
+                    }
+                    self.moved = before;
+                    // The else path ends in unreachable code that may hold instructions; close it.
+                    self.b.ins().trap(TrapCode::unwrap_user(1));
+                    self.b.switch_to_block(bind_blk);
+                    self.b.seal_block(bind_blk);
+                    self.dead = was_dead;
+                } else if self.cg_missing(vec![vec![pat.clone()]], &vty).is_some() {
+                    return err(
+                        "this `let` pattern might not match; use `if let`, `match` or `let else` instead",
+                        pat.span,
+                    );
                 }
                 let _ = span;
                 self.pat_bind(pat, &vty, &vals, own)?;
